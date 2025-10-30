@@ -1,0 +1,382 @@
+
+
+from librosa import resample
+import tempfile
+import numpy as np
+import subprocess
+import librosa
+import soundfile as sf
+from scipy.ndimage import uniform_filter1d
+import re
+import os
+
+def detect_call_bounds(audio_array,
+                       sr=22050,
+                       smooth_ms=20,
+                       threshold_ratio=0.2,
+                       min_gap_s=0.05,
+                       min_call_s=0.03):
+    """
+    Detects the main bird call (onset, offset) in a clean recording.
+    Small gaps between energy bursts are merged if shorter than `min_gap_s`.
+
+    Returns:
+        (onset_time_s, offset_time_s)
+        or None if no prominent call is found.
+    """
+    # 1. Load audio
+    y = audio_array
+
+    # 2. Short-time energy (RMS)
+    hop_length = int(0.005 * sr)  # 5 ms hop
+    frame_length = int(0.02 * sr)
+    rms = librosa.feature.rms(y=y, frame_length=frame_length, hop_length=hop_length)[0]
+    times = librosa.frames_to_time(np.arange(len(rms)), sr=sr, hop_length=hop_length)
+
+    # 3. Smooth the energy envelope
+    win = int(smooth_ms / 5) or 1
+    smooth_rms = np.convolve(rms, np.ones(win)/win, mode='same')
+
+    # 4. Threshold at a fraction of the maximum energy
+    thresh = threshold_ratio * np.max(smooth_rms)
+    mask = smooth_rms > thresh
+
+    # 5. Convert mask to contiguous regions
+    diff = np.diff(mask.astype(int))
+    onsets = np.where(diff == 1)[0] + 1
+    offsets = np.where(diff == -1)[0] + 1
+    if mask[0]:
+        onsets = np.r_[0, onsets]
+    if mask[-1]:
+        offsets = np.r_[offsets, len(mask)]
+
+    if len(onsets) == 0:
+        return None
+
+    # 6. Merge regions separated by short gaps
+    merged_onsets = [onsets[0]]
+    merged_offsets = []
+    for i in range(1, len(onsets)):
+        gap = times[onsets[i]] - times[offsets[i-1]]
+        if gap <= min_gap_s:
+            # Merge with previous
+            continue
+        else:
+            merged_offsets.append(offsets[i-1])
+            merged_onsets.append(onsets[i])
+    merged_offsets.append(offsets[-1])
+
+    # 7. Keep only regions longer than min_call_s
+    events = [(times[o], times[f]) for o, f in zip(merged_onsets, merged_offsets)
+              if (times[f] - times[o]) >= min_call_s]
+    if not events:
+        return None
+
+    # 8. Return all regions in s
+    return events
+
+def get_longest_call(events):
+    # Return the longest region (main call)
+    durations = [f - o for o, f in events]
+    i = np.argmax(durations)
+    onset, offset = events[i]
+    return onset, offset
+
+def merge_gaps(events, min_gap_s, sampling_rate):
+    sr = sampling_rate
+    onsets, offsets = zip(*events)
+    print(onsets)
+    merged_onsets = [onsets[0]]
+    merged_offsets = []
+    for i in range(1, len(onsets)):
+        gap = onsets[i] - offsets[i-1]
+        if gap <= min_gap_s:
+            # Merge with previous
+            continue
+        else:
+            merged_offsets.append(offsets[i-1])
+            merged_onsets.append(onsets[i])
+    merged_offsets.append(offsets[-1])
+
+    events = [(o, f) for o, f in zip(merged_onsets, merged_offsets)]
+    return events
+
+def num_samples_to_duration_s(num_samples, sampling_rate):
+    return num_samples / sampling_rate
+
+def duration_s_to_num_samples(duration_s, sampling_rate):
+    return duration_s * sampling_rate
+
+def silence_gaps(audio_array, sampling_rate, events):
+    # get sample precise on- and offsets
+    event_samples = [(duration_s_to_num_samples(onset, sampling_rate), duration_s_to_num_samples(offset, sampling_rate)) for (onset, offset) in events]
+    onsets, offsets = zip(*event_samples)
+
+    # silence gaps
+    clean_audio = np.zeros(len(audio_array))
+    copy_values = False
+
+    for i in range(len(audio_array)):
+
+        if i in onsets:
+            copy_values = True
+        if i in offsets:
+            copy_values = False
+
+        if copy_values:
+            clean_audio[i] = audio_array[i]
+
+    return clean_audio
+
+def stft_mask_bandpass(y, sr,
+                       n_fft=1024, hop_length=None,
+                       collapse='max', smooth_bins=5,
+                       low_pct=5, high_pct=95,
+                       edge_bins=5,   # soft edge width in freq bins
+                       events = None # list of (onset_s, offset_s) or None -> whole file
+                       #segments=None  # list of (start_sample, end_sample) or None -> whole file
+                      ):
+    """
+    Remove energy outside percentile-based frequency bands (per segment or globally).
+    Returns:
+        y_out: filtered waveform (same length as input)
+        bounds_list: list of tuples (segment_start_sample, segment_end_sample, f_low, f_high)
+    """
+    if hop_length is None:
+        hop_length = n_fft // 4
+
+    # STFT
+    S = librosa.stft(y, n_fft=n_fft, hop_length=hop_length, win_length=n_fft)
+    mags = np.abs(S)
+    phase = np.angle(S)
+    freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
+
+    n_bins, n_frames = mags.shape
+
+    # If no segments provided, treat the whole file as one segment
+    if events is None:
+        segments = None
+    else:
+        segments = [(duration_s_to_num_samples(onset, sr), duration_s_to_num_samples(offset, sr)) for (onset, offset) in events]
+
+    if segments is None:
+        segments = [(0, len(y))]
+
+    # Create mask initialized zeros and init bounds list
+    mask = np.zeros_like(mags)
+    bounds_list = []
+
+    for (start_sample, end_sample) in segments:
+        # map sample indices to frame indices
+        t0 = int(np.floor(start_sample / float(hop_length)))
+        t1 = int(np.ceil(end_sample / float(hop_length)))
+        t0 = max(0, t0)
+        t1 = min(n_frames, t1)
+
+        if t0 >= t1:
+            continue
+
+        # collapse magnitude across the selected frames to get a mean spectrum
+        block = mags[:, t0:t1]
+        if collapse == 'max':
+            spec = np.max(block, axis=1)
+        elif collapse == 'median':
+            spec = np.median(block, axis=1)
+        else:
+            spec = np.mean(block, axis=1)
+
+        # smooth and normalize
+        if smooth_bins and smooth_bins > 1:
+            spec = uniform_filter1d(spec, size=smooth_bins)
+        spec = np.maximum(spec, 0.0)
+        total = spec.sum()
+        if total <= 0:
+            continue
+        spec_norm = spec / total
+        cumsum = np.cumsum(spec_norm)
+
+        # find percentile bounds
+        f_low = np.interp(low_pct/100.0, cumsum, freqs)
+        f_high = np.interp(high_pct/100.0, cumsum, freqs)
+
+        # Store the bounds
+        bounds_list.append((num_samples_to_duration_s(start_sample, sr), num_samples_to_duration_s(end_sample, sr), float(f_low), float(f_high)))
+
+        # convert to bin indices
+        idx_low = np.searchsorted(freqs, f_low)
+        idx_high = np.searchsorted(freqs, f_high)
+
+        # build mask for frames t0:t1
+        for f_idx in range(n_bins):
+            if idx_low <= f_idx <= idx_high:
+                mask[f_idx, t0:t1] = 1.0
+
+        # apply soft edges (linear ramp) around idx_low/idx_high
+        if edge_bins > 0:
+            for k in range(1, edge_bins+1):
+                if idx_low - k >= 0:
+                    ramp = (edge_bins - (k-1)) / float(edge_bins+1)  # simple ramp
+                    mask[idx_low - k, t0:t1] = np.maximum(mask[idx_low - k, t0:t1], ramp)
+                if idx_high + k < n_bins:
+                    ramp = (edge_bins - (k-1)) / float(edge_bins+1)
+                    mask[idx_high + k, t0:t1] = np.maximum(mask[idx_high + k, t0:t1], ramp)
+
+    # Apply mask (elementwise) to magnitude and rebuild complex STFT
+    S_masked = mask * mags * np.exp(1j * phase)
+
+    # ISTFT
+    y_out = librosa.istft(S_masked, hop_length=hop_length, win_length=n_fft, length=len(y))
+
+    return y_out, bounds_list
+
+import numpy as np
+import librosa
+import librosa.display
+import matplotlib.pyplot as plt
+from matplotlib import gridspec
+from pathlib import Path
+import ast
+
+def plot_save_mel_spectrogram(audio_array, sampling_rate, filename=None, details=None, output_dir=None):
+    """
+    Takes audio_array and sampling_rate as input. Computes Mel spectrogram, plot waveform + spectrogram,
+    and saves figure to output_dir if provided.
+
+    Parameters
+    ----------
+    audio : huggingface Audio object
+    """
+
+    # Enforce mono 
+    if not audio_array.ndim == 1:
+        audio_array = np.mean(audio_array, axis=0)
+
+    # Compute Mel spectrogram
+    mel_spec = librosa.feature.melspectrogram(y=audio_array, sr=sampling_rate, fmax=8000)
+    S_dB = librosa.power_to_db(mel_spec, ref=np.max)
+
+    # --- Create figure using GridSpec for precise layout ---
+    fig = plt.figure(figsize=(10, 6))
+    gs = gridspec.GridSpec(2, 2, width_ratios=[20, 1], height_ratios=[1, 3], figure=fig)
+
+    # Axes
+    ax_wave = fig.add_subplot(gs[0, 0])  # waveform
+    ax_spec = fig.add_subplot(gs[1, 0], sharex=ax_wave)  # spectrogram
+    cax = fig.add_subplot(gs[1, 1])  # colorbar
+
+    # --- Plot waveform ---
+    times = np.arange(audio_array.size) / sampling_rate
+    ax_wave.plot(times, audio_array, color="gray")
+    ax_wave.set_ylabel("Amplitude")
+
+    title = ""
+    if filename:
+        title += filename
+    if details:
+        title += f" [{details}]"
+    ax_wave.set_title(title)
+
+    ax_wave.grid(True, linestyle="--", alpha=0.3)
+    plt.setp(ax_wave.get_xticklabels(), visible=False)  # hide x labels on top plot
+
+    # --- Plot spectrogram ---
+    img = librosa.display.specshow(
+        S_dB,
+        x_axis="time",
+        y_axis="mel",
+        sr=sampling_rate,
+        fmax=8000,
+        ax=ax_spec,
+    )
+    fig.colorbar(img, cax=cax, format="%+2.0f dB", label="dB")
+    ax_spec.set_xlabel("Time [s]")
+    ax_spec.set_ylabel("Mel frequency [Hz]")
+
+    plt.tight_layout()
+    plt.show()
+
+    # --- Save figure ---
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+        if details:
+            save_path = output_dir + f"{Path(filename).stem}_{details}.png"
+        else:
+            save_path = output_dir + f"{Path(filename).stem}.png"
+        fig.savefig(save_path, dpi=150)
+        plt.close(fig)
+
+        print(f"Saved Mel spectrogram to: {save_path}")
+
+def analyze_with_birdnetlib(audio_array, original_sampling_rate, birdnet_sampling_rate=48000, lat=None, lon=None):
+    """
+    Analyze audio array with BirdNETLib via a subprocess.
+
+    Parameters
+    ----------
+    audio_array : np.ndarray
+        Audio data.
+    original_sampling_rate : int
+        Sampling rate of the input audio.
+    birdnet_sampling_rate : int, optional
+        Sampling rate for BirdNETLib (default 48000).
+    lat : float or str, optional
+        Latitude for location filtering.
+    lon : float or str, optional
+        Longitude for location filtering.
+
+    Returns
+    -------
+    list or None
+        List of detections, or None if no detections found.
+    """
+    # Resample to 48 kHz
+    y = resample(audio_array, orig_sr=original_sampling_rate, target_sr=birdnet_sampling_rate)
+
+    # Save temporary .npy file
+    with tempfile.NamedTemporaryFile(suffix=".npy") as tmp_file:
+        np.save(tmp_file.name, y)
+
+        # Build the command
+        # TODO: remove python path and specify env instead
+        cmd = [
+            # "conda", "run", "-n", "birdnetlib",
+            # "python", 
+            "/Users/maltecohrt/miniconda3/envs/birdnetlib/bin/python",
+            "source/birdnetlib_inference.py",
+            "--array_file", tmp_file.name,
+            "--sr", str(birdnet_sampling_rate)
+        ]
+
+        if lat is not None:
+            cmd += ["--lat", str(lat)]
+        if lon is not None:
+            cmd += ["--lon", str(lon)]
+
+        # Run subprocess
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True
+        )
+
+        # Error handling for failed subprocess
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Subprocess failed with return code {result.returncode}\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            )
+
+        # Ensure stdout is captured
+        output = result.stdout
+        if output is None:
+            raise RuntimeError("No output captured from subprocess")
+
+        # Extract list of detections
+        # Extract the line containing the list of detections
+        match = re.search(r"(\[\{.*?\}\])", output, re.DOTALL)
+        if match:
+            detections = ast.literal_eval(match.group(1))
+        else:
+            detections = None
+
+        return detections
