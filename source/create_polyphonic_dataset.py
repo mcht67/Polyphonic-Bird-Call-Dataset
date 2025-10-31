@@ -10,8 +10,8 @@ import tempfile
 from pathlib import Path
 import numpy as np
 
-from source_separation import load_separation_model, separate_audio, get_best_source_idx
-from utils import process_in_batches, validate_species_tag, get_most_confident_detection
+from source_separation import load_separation_model, separate_audio
+from utils import process_in_batches, validate_species_tag, get_most_confident_detection, get_best_source_idx
 from dsp import analyze_with_birdnetlib, detect_call_bounds, stft_mask_bandpass, plot_save_mel_spectrogram
 
 

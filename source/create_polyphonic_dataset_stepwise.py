@@ -3,15 +3,16 @@
 # - BirdSet Dataset key (eg. 'HSN') [problem BirdSet necessary, ] or datasetpath?
 # - output_dir for dataset
 
-from datasets import Audio, load_dataset, load_from_disk
+from datasets import Audio, load_dataset, load_from_disk, Dataset
 import datasets
 from functools import partial
 import tempfile
 from pathlib import Path
 import numpy as np
+from tqdm import tqdm
 
-from source_separation import load_separation_model, separate_audio, get_best_source_idx
-from utils import process_in_batches, validate_species_tag, get_most_confident_detection
+from source_separation import load_separation_model, separate_audio
+from utils import process_in_batches, validate_species_tag, get_most_confident_detection, get_best_source_idx, get_validated_sources
 from dsp import analyze_with_birdnetlib, detect_call_bounds, stft_mask_bandpass, plot_save_mel_spectrogram
 
 def separate_example(example, separation_session_data=None):
@@ -34,7 +35,7 @@ def separate_example(example, separation_session_data=None):
 
     return example
 
-def filter_example(example, birdset_subset):
+def extract_calls_from_example(example, birdset_subset):
     
     # get all sources
     i = 0
@@ -50,42 +51,55 @@ def filter_example(example, birdset_subset):
     list_of_detections_per_source = []
     for source_array in sources:
         detections = analyze_with_birdnetlib(source_array, sources_sampling_rate)
-        print(detections)
         list_of_detections_per_source.append(detections)
 
-    # choose source
-    best_source_idx = get_best_source_idx(list_of_detections_per_source)
-    best_source = sources[best_source_idx]
+    # get all good sources
+    validated_sources_data = get_validated_sources(list_of_detections_per_source, example, birdset_subset)
 
-    # validate species
-    most_confident_detection = get_most_confident_detection(list_of_detections_per_source[best_source_idx])
-    is_validated, birdset_label, birdnet_detection = validate_species_tag(ebird_code, birdset_subset, most_confident_detection)
+    if not validated_sources_data:
+        return None
 
-    # TODO: 
-    # - all calls should be validated, not just highest confidence ones 
-    # - this should also be part of choosing the source -> sources with only one bird should be higher ranked
 
-    if is_validated:
+    validated_sources_examples = []
+
+    for validated_source in validated_sources_data:
+
+        source_idx = validated_source['source_index']
+        source_array = sources[source_idx]
         # get on-/offsets
-        call_bounds = detect_call_bounds(best_source, sr=sources_sampling_rate,
+        call_bounds = detect_call_bounds(source_array, sr=sources_sampling_rate,
                         smooth_ms=25,
                         threshold_ratio=0.1,
                         min_gap_s=0.02,
                         min_call_s=0.1)
 
         # get bounding boxes and mask audio
-        audio_filtered, time_frequency_bounds = stft_mask_bandpass(best_source, sources_sampling_rate, n_fft=1024, low_pct=2, high_pct=98, events=call_bounds)
+        audio_filtered, time_frequency_bounds = stft_mask_bandpass(source_array, sources_sampling_rate, n_fft=1024, low_pct=2, high_pct=98, events=call_bounds)
 
         # store filtered audio and time-frequency bounds
-        example['audio_filtered'] = audio_filtered
-        example['time_freq_bounds'] = time_frequency_bounds
-        #plot_save_mel_spectrogram(audio_filtered, source_sr, f"{filename} [{birdset_label}]")
-    else:
-        example['audio_filtered'] = None
-        example['time_freq_bounds'] = None
-        print(f'Species could not be validated. Birdset-Label: {birdset_label}, BirdNet-Detection: {birdnet_detection}')
+        validated_sources_examples.append({
+            'audio_filtered': {"array": audio_filtered, "sampling_rate": sources_sampling_rate},
+            'time_freq_bounds': time_frequency_bounds,
+            'scientific_name': validated_source['scientific_name'],
+            'original_birdset_subset': birdset_subset,
+            'original_file': example['filepath']
 
-    return example
+            # - preprocessed call  - Audio(audio_array, sampling_rate)
+            # - time frequency bounds
+            # - scientific name
+            # - common name
+            # - original dataset - string
+            # - original file - string
+            # - timestamps original file - start, end
+        })
+    
+    return validated_sources_examples
+
+    # return {'audio_filtered': [e["audio_filtered"] for e in validated_sources_examples],
+    #         'time_freq_bounds': [e["time_freq_bounds"] for e in validated_sources_examples],
+    #         'scientific_name': [e["scientific_name"] for e in validated_sources_examples],
+    #         'original_birdset_subset': [e["original_birdset_subset"] for e in validated_sources_examples],
+    #         'original_file': [e["original_file"] for e in validated_sources_examples]}
 
 
 
@@ -174,57 +188,85 @@ def main():
     # print("")
 
     
-    print("Load raw subset from disk...")
-    subset = load_from_disk('datasets/raw_subset')
-    print(subset)
-    print('')
+    # print("Load raw subset from disk...")
+    # subset = load_from_disk('datasets/raw_subset')
+    # print(subset)
+    # print('')
 
-    # ------------------------
-    # Separate Audio 
-    # ------------------------
+    # # ------------------------
+    # # Separate Audio 
+    # # ------------------------
 
     # Save the current cache path
     original_cache = datasets.config.HF_DATASETS_CACHE
 
-    # Load source separation model
-    session, input_node, output_node = load_separation_model(model_dir="resources/bird_mixit_model_checkpoints/output_sources4", 
-                            checkpoint="resources/bird_mixit_model_checkpoints/output_sources4/model.ckpt-3223090")
-    separation_session_data = (session, input_node, output_node)
+    # # Load source separation model
+    # session, input_node, output_node = load_separation_model(model_dir="resources/bird_mixit_model_checkpoints/output_sources4", 
+    #                         checkpoint="resources/bird_mixit_model_checkpoints/output_sources4/model.ckpt-3223090")
+    # separation_session_data = (session, input_node, output_node)
 
-    # Store with on-/offset, frequency bounds in original file
-    with tempfile.TemporaryDirectory() as temp_cache_dir:
+    # # Store with on-/offset, frequency bounds in original file
+    # with tempfile.TemporaryDirectory() as temp_cache_dir:
 
-        separate_fn = partial(
-            separate_example,
-            separation_session_data=separation_session_data
-        )
+    #     separate_fn = partial(
+    #         separate_example,
+    #         separation_session_data=separation_session_data
+    #     )
 
-        separated_dataset = process_in_batches(
-                        subset,
-                        process_fn=separate_fn,
-                        cache_dir=temp_cache_dir,
-                    )
+    #     separated_dataset = process_in_batches(
+    #                     subset,
+    #                     process_fn=separate_fn,
+    #                     cache_dir=temp_cache_dir,
+    #                 )
         
+    # print(separated_dataset)
+
+    # # Save preprocessed dataset
+    # output_path = "datasets/separated_subset"
+    # separated_dataset.save_to_disk(output_path)
+    # print("")
+    # print(f"Saved separated dataset to {output_path}")
+    # print("")
+
+    separated_dataset = load_from_disk('datasets/separated_subset')
     print(separated_dataset)
 
-    # Save preprocessed dataset
-    output_path = "datasets/separated_subset"
-    separated_dataset.save_to_disk(output_path)
-    print("")
-    print(f"Saved separated dataset to {output_path}")
-    print("")
+    # ------------------------------
+    # Extract calls / Filter audio
+    # ------------------------------
 
-    new_dataset = load_from_disk('datasets/separated_subset')
-    print(new_dataset)
+    new_rows = {
+    "audio_filtered": [],
+    "time_freq_bounds": [],
+    "scientific_name": [],
+    "original_birdset_subset": [],
+    "original_file": []
+    }
 
-    # # ------------------------------
-    # # Extract calls / Filter audio
-    # # ------------------------------
+    for example in tqdm(separated_dataset.select(range(5))):
+        validated_sources = extract_calls_from_example(example, birdset_subset="HSN")
+        if validated_sources:
+            for row in validated_sources:  # each row is a dict with a single audio dict
+                new_rows["audio_filtered"].append(row["audio_filtered"])
+                new_rows["time_freq_bounds"].append(row["time_freq_bounds"])
+                new_rows["scientific_name"].append(row["scientific_name"])
+                new_rows["original_birdset_subset"].append(row["original_birdset_subset"])
+                new_rows["original_file"].append(row["original_file"])
+
+    filtered_dataset = Dataset.from_dict(new_rows)
+
+    # Cast audio_filtered to Audio()
+    from datasets import Audio
+    filtered_dataset = filtered_dataset.cast_column("audio_filtered", Audio())
+
+    # out = extract_calls_from_example(separated_dataset[0], "HSN")
+    # # print({k: len(v) for k, v in out.items()})
+    # print(out)
 
     # with tempfile.TemporaryDirectory() as temp_cache_dir:
 
     #     filter_fn = partial(
-    #         filter_example,
+    #         extract_calls_from_example,
     #         birdset_subset='HSN'
     #     )
 
@@ -232,22 +274,23 @@ def main():
     #                     separated_dataset,
     #                     process_fn=filter_fn,
     #                     cache_dir=temp_cache_dir,
+    #                     remove_columns=separated_dataset.column_names
     #                 )
 
     # print(filtered_dataset)
-    # # --------------------------
-    # # Store Preprocessed Dataset
-    # # --------------------------
+    # --------------------------
+    # Store Preprocessed Dataset
+    # --------------------------
     
-    # # Save preprocessed dataset
-    # output_path = "datasets/preprocessed_subset"
-    # filtered_dataset.save_to_disk(output_path)
-    # print("")
-    # print(f"Saved preprocessed dataset to {output_path}")
-    # print("")
+    # Save preprocessed dataset
+    output_path = "datasets/preprocessed_subset"
+    filtered_dataset.save_to_disk(output_path)
+    print("")
+    print(f"Saved preprocessed dataset to {output_path}")
+    print("")
 
-    # new_dataset = load_from_disk('datasets/preprocessed_subset')
-    # print(new_dataset)
+    new_dataset = load_from_disk('datasets/preprocessed_subset')
+    print(new_dataset)
 
     # After the block ends, restore it
     datasets.config.HF_DATASETS_CACHE = original_cache
