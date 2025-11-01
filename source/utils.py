@@ -265,5 +265,82 @@ def check_dominant_species(detections, threshold=0.9):
     species, count = counts.most_common(1)[0]
     ratio = count / len(detections)
     return species, ratio >= threshold
+
+def only_target_bird_detected(detections, target_scientific_name, start_time, end_time, confidence_threshold=0.0):
+    """
+    Checks if only the target bird is detected within a specific time window.
+
+    Parameters:
+        detections (list[dict]): List of detection dicts with keys:
+                                 'scientific_name', 'start_time', 'end_time', 'confidence'
+        target_scientific_name (str): The bird to check against.
+        start_time (float): Start of the time window (in seconds).
+        end_time (float): End of the time window (in seconds).
+        confidence_threshold (float): Minimum confidence to consider a detection valid.
+
+    Returns:
+        bool: True  -> only the target bird detected (and at least one detection exists)
+              False -> if no detections or another bird with >= confidence_threshold was detected
+    """
+    def overlaps(det_start, det_end, win_start, win_end):
+        """Return True if detection overlaps the time window."""
+        return not (det_end <= win_start or det_start >= win_end)
+
+    # Filter detections that overlap the time window
+    window_detections = [
+        det for det in detections
+        if overlaps(det["start_time"], det["end_time"], start_time, end_time)
+    ]
+
+    # If no detections at all → return False
+    if not window_detections:
+        return False
+
+    # Check each detection
+    for det in window_detections:
+        if det["confidence"] >= confidence_threshold:
+            # If detection is not the target species → False
+            if normalize_name(det["scientific_name"]) != normalize_name(target_scientific_name):
+                return False
+
+    # If we reach here, only target bird(s) were detected
+    return True
+
+def extract_relevant_bounds(segment_start_time, segment_end_time, time_freq_bounds):
+    """
+    Extract and adjust time-frequency bounds relevant to a given audio segment.
+
+    Parameters:
+        segment_start_time (float): Start time of the segment (in seconds).
+        segment_end_time (float): End time of the segment (in seconds).
+        time_freq_bounds (list[tuple]): List of tuples
+                                        (start_time, end_time, low_freq, high_freq)
+                                        all in reference to the original file.
+
+    Returns:
+        list[tuple]: Relevant time-frequency bounds adjusted to be relative
+                     to the start of the segment.
+                     Format: (adj_start_time, adj_end_time, low_freq, high_freq)
+    """
+    relevant_bounds = []
+
+    for start, end, low_f, high_f in time_freq_bounds:
+        # Check overlap with segment
+        if end <= segment_start_time or start >= segment_end_time:
+            continue  # no overlap
+
+        # Clip to the segment window
+        clipped_start = max(start, segment_start_time)
+        clipped_end = min(end, segment_end_time)
+
+        # Shift so times are relative to the segment
+        relative_start = clipped_start - segment_start_time
+        relative_end = clipped_end - segment_start_time
+
+        relevant_bounds.append((relative_start, relative_end, low_f, high_f))
+
+    return relevant_bounds
+
+
     
     

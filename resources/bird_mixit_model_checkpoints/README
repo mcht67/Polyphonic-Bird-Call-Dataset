@@ -1,0 +1,3 @@
+This is a model checkpoint trained on environmental recordings of bird calls with mixture invariant training
+(MixIT), licensed under the Apache 2.0 License. See the following for more details:
+https://github.com/google-research/sound-separation/blob/master/models/bird_mixit/README.md

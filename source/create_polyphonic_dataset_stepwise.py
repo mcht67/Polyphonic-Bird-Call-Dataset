@@ -12,8 +12,9 @@ import numpy as np
 from tqdm import tqdm
 
 from source_separation import load_separation_model, separate_audio
-from utils import process_in_batches, validate_species_tag, get_most_confident_detection, get_best_source_idx, get_validated_sources
-from dsp import analyze_with_birdnetlib, detect_call_bounds, stft_mask_bandpass, plot_save_mel_spectrogram
+from utils import process_in_batches, validate_species_tag, get_most_confident_detection, get_best_source_idx, get_validated_sources, only_target_bird_detected, extract_relevant_bounds
+from dsp import analyze_with_birdnetlib, detect_call_bounds, stft_mask_bandpass, plot_save_mel_spectrogram, segment_audio, remove_segments_without_events
+
 
 def separate_example(example, separation_session_data=None):
 
@@ -59,8 +60,7 @@ def extract_calls_from_example(example, birdset_subset):
     if not validated_sources_data:
         return None
 
-
-    validated_sources_examples = []
+    call_examples = []
 
     for validated_source in validated_sources_data:
 
@@ -77,29 +77,119 @@ def extract_calls_from_example(example, birdset_subset):
         audio_filtered, time_frequency_bounds = stft_mask_bandpass(source_array, sources_sampling_rate, n_fft=1024, low_pct=2, high_pct=98, events=call_bounds)
 
         # store filtered audio and time-frequency bounds
-        validated_sources_examples.append({
+        call_examples.append({
             'audio_filtered': {"array": audio_filtered, "sampling_rate": sources_sampling_rate},
             'time_freq_bounds': time_frequency_bounds,
             'scientific_name': validated_source['scientific_name'],
             'original_birdset_subset': birdset_subset,
             'original_file': example['filepath']
-
-            # - preprocessed call  - Audio(audio_array, sampling_rate)
-            # - time frequency bounds
-            # - scientific name
             # - common name
-            # - original dataset - string
-            # - original file - string
             # - timestamps original file - start, end
         })
     
-    return validated_sources_examples
+    return call_examples
 
-    # return {'audio_filtered': [e["audio_filtered"] for e in validated_sources_examples],
-    #         'time_freq_bounds': [e["time_freq_bounds"] for e in validated_sources_examples],
-    #         'scientific_name': [e["scientific_name"] for e in validated_sources_examples],
-    #         'original_birdset_subset': [e["original_birdset_subset"] for e in validated_sources_examples],
-    #         'original_file': [e["original_file"] for e in validated_sources_examples]}
+def extract_segments_from_example(example, birdset_subset):
+
+    filename = Path(example['filepath']).name
+    
+    # get all sources
+    i = 0
+    sources = []
+    while f"source_{i}" in example:
+        sources.append(np.array(example[f"source_{i}"]))
+        i += 1
+    sources_sampling_rate = example['sources_sampling_rate']
+
+    ebird_code = example["ebird_code"]
+    
+    # analyze audio with birdnetlib
+    list_of_detections_per_source = []
+    for source_array in sources:
+        detections = analyze_with_birdnetlib(source_array, sources_sampling_rate)
+        list_of_detections_per_source.append(detections)
+
+    # get all good sources
+    validated_sources_data = get_validated_sources(list_of_detections_per_source, example, birdset_subset)
+
+    if not validated_sources_data:
+        return None
+
+    segmented_example = []
+
+    for validated_source in validated_sources_data:
+
+        source_idx = validated_source['source_index']
+        source_array = sources[source_idx]
+
+        # Get on-/offsets
+        call_bounds = detect_call_bounds(source_array, sr=sources_sampling_rate,
+                        smooth_ms=25,
+                        threshold_ratio=0.1,
+                        min_gap_s=0.02,
+                        min_call_s=0.1)
+
+        # Get bounding boxes and mask audio
+        audio_filtered, time_frequency_bounds = stft_mask_bandpass(source_array, sources_sampling_rate, n_fft=1024, low_pct=2, high_pct=98, events=call_bounds)
+
+        # Segment audio
+        segment_length= 5
+        audio_segments = segment_audio(audio_filtered, sources_sampling_rate, segment_length, keep_incomplete=True)
+        print(len(audio_segments))
+
+        # Remove segments without events
+        segments_with_events = remove_segments_without_events(audio_segments, call_bounds)
+        print(len(segments_with_events))
+
+        # TODO: Remove, is done in only_targe_bird_detected
+        # # Remove segments without detection 
+        # detection_bounds = validated_source['detection_bounds']
+        # segments_with_detections = remove_segments_without_events(segments_with_events, detection_bounds)
+        # print(len(segments_with_detections))
+
+        # Remove segments with detections of other birds
+        detections = list_of_detections_per_source[source_idx]
+        scientific_name = validated_source['scientific_name']
+
+        for segment in segments_with_events:
+            start_time = segment['start_time']
+            end_time = segment['end_time']
+            if only_target_bird_detected(detections, scientific_name, start_time, end_time, confidence_threshold=0.0):
+                segment_to_return = {
+                    "audio": {'array': segment['audio_array'], 'sampling_rate': sources_sampling_rate},
+                    "time_freq_bounds": extract_relevant_bounds(start_time, end_time, time_frequency_bounds),
+                    "scientific_name": scientific_name,
+                    "original_birdset_subset": birdset_subset,
+                    "original_file": filename
+                    }
+
+                segmented_example.append(segment_to_return)
+
+        print(len(segmented_example))
+
+        # - check:
+        #     - if clip contains event
+        #     - if clip contains detection
+        #     - if no detection of other bird with high confidence
+        # - use random padding if necessary
+
+            # # store filtered audio and time-frequency bounds
+            # segments.append({
+            #     'audio_filtered': {"array": audio_filtered, "sampling_rate": sources_sampling_rate},
+            #     'time_freq_bounds': time_frequency_bounds,
+            #     'scientific_name': validated_source['scientific_name'],
+            #     'original_birdset_subset': birdset_subset,
+            #     'original_file': example['filepath']
+            #     # - common name
+            #     # - timestamps original file - start, end
+            #     # - birdnet detections
+            # })
+
+
+        
+        
+    
+    return segmented_example
 
 
 
@@ -235,8 +325,8 @@ def main():
     # Extract calls / Filter audio
     # ------------------------------
 
-    new_rows = {
-    "audio_filtered": [],
+    segments_dataset_rows = {
+    "audio": [],
     "time_freq_bounds": [],
     "scientific_name": [],
     "original_birdset_subset": [],
@@ -244,20 +334,48 @@ def main():
     }
 
     for example in tqdm(separated_dataset.select(range(5))):
-        validated_sources = extract_calls_from_example(example, birdset_subset="HSN")
-        if validated_sources:
-            for row in validated_sources:  # each row is a dict with a single audio dict
-                new_rows["audio_filtered"].append(row["audio_filtered"])
-                new_rows["time_freq_bounds"].append(row["time_freq_bounds"])
-                new_rows["scientific_name"].append(row["scientific_name"])
-                new_rows["original_birdset_subset"].append(row["original_birdset_subset"])
-                new_rows["original_file"].append(row["original_file"])
+        segments = extract_segments_from_example(example, birdset_subset="HSN")
+        if segments:
+            for row in segments:  # each row is a dict with a single audio dict
+                segments_dataset_rows["audio"].append(row["audio"])
+                segments_dataset_rows["time_freq_bounds"].append(row["time_freq_bounds"])
+                segments_dataset_rows["scientific_name"].append(row["scientific_name"])
+                segments_dataset_rows["original_birdset_subset"].append(row["original_birdset_subset"])
+                segments_dataset_rows["original_file"].append(row["original_file"])
 
-    filtered_dataset = Dataset.from_dict(new_rows)
+    segments_dataset = Dataset.from_dict(segments_dataset_rows)
 
     # Cast audio_filtered to Audio()
     from datasets import Audio
-    filtered_dataset = filtered_dataset.cast_column("audio_filtered", Audio())
+    segments_dataset = segments_dataset.cast_column("audio", Audio())
+
+    # ------------------------------
+
+    # new_rows = {
+    # "audio_filtered": [],
+    # "time_freq_bounds": [],
+    # "scientific_name": [],
+    # "original_birdset_subset": [],
+    # "original_file": []
+    # }
+
+    # for example in tqdm(separated_dataset.select(range(5))):
+    #     validated_sources = extract_calls_from_example(example, birdset_subset="HSN")
+    #     if validated_sources:
+    #         for row in validated_sources:  # each row is a dict with a single audio dict
+    #             new_rows["audio_filtered"].append(row["audio_filtered"])
+    #             new_rows["time_freq_bounds"].append(row["time_freq_bounds"])
+    #             new_rows["scientific_name"].append(row["scientific_name"])
+    #             new_rows["original_birdset_subset"].append(row["original_birdset_subset"])
+    #             new_rows["original_file"].append(row["original_file"])
+
+    # filtered_dataset = Dataset.from_dict(new_rows)
+
+    # # Cast audio_filtered to Audio()
+    # from datasets import Audio
+    # filtered_dataset = filtered_dataset.cast_column("audio_filtered", Audio())
+
+    # ------------------------------
 
     # out = extract_calls_from_example(separated_dataset[0], "HSN")
     # # print({k: len(v) for k, v in out.items()})
@@ -278,13 +396,15 @@ def main():
     #                 )
 
     # print(filtered_dataset)
+
+    
     # --------------------------
     # Store Preprocessed Dataset
     # --------------------------
     
     # Save preprocessed dataset
     output_path = "datasets/preprocessed_subset"
-    filtered_dataset.save_to_disk(output_path)
+    segments_dataset.save_to_disk(output_path)
     print("")
     print(f"Saved preprocessed dataset to {output_path}")
     print("")

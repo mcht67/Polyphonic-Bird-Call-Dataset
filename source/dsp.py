@@ -380,3 +380,71 @@ def analyze_with_birdnetlib(audio_array, original_sampling_rate, birdnet_samplin
             detections = None
 
         return detections
+    
+def segment_audio(audio_array, sampling_rate, segment_length, keep_incomplete=False):
+    """
+    Splits an audio array into fixed-length segments.
+    If keep_incomplete=True, the last (possibly shorter) segment is kept.
+    Each segment is returned along with its start and end timestamps (in seconds).
+
+    Parameters:
+        audio_array (np.ndarray): The input audio array (1D or 2D).
+        sampling_rate (int): Sampling rate of the audio in Hz.
+        segment_length (float): Desired length of each segment in seconds.
+        keep_incomplete (bool): Whether to keep the final shorter segment.
+
+    Returns:
+        list[dict]: A list of dictionaries, each containing:
+            - "segment" (np.ndarray): The audio segment.
+            - "start_time" (float): Start time in seconds.
+            - "end_time" (float): End time in seconds.
+    """
+    samples_per_segment = int(sampling_rate * segment_length)
+    total_samples = len(audio_array)
+    segments = []
+
+    for start in range(0, total_samples, samples_per_segment):
+        end = start + samples_per_segment
+        segment = audio_array[start:end]
+
+        # Skip incomplete if not desired
+        if not keep_incomplete and len(segment) < samples_per_segment:
+            continue
+
+        start_time = start / sampling_rate
+        end_time = min(end, total_samples) / sampling_rate
+
+        segments.append({
+            "audio_array": segment,
+            "start_time": start_time,
+            "end_time": end_time
+        })
+
+    return segments
+
+def remove_segments_without_events(segments, events):
+    """
+    Checks which audio segments contain at least one event.
+
+    Parameters:
+        segments (list[dict]): Each dict must have 'start_time' and 'end_time' (in seconds).
+        events (list[tuple]): Each tuple is (event_start, event_end) in seconds.
+
+    Returns:
+        list[dict]: A filtered list of segments that contain at least one event.
+    """
+    def overlaps(seg_start, seg_end, evt_start, evt_end):
+        # Two intervals overlap if they intersect at all
+        return not (evt_end <= seg_start or evt_start >= seg_end)
+
+    segments_with_event = []
+    for seg in segments:
+        seg_start = seg["start_time"]
+        seg_end = seg["end_time"]
+
+        # Check if any event overlaps this segment
+        if any(overlaps(seg_start, seg_end, e_start, e_end) for e_start, e_end in events):
+            segments_with_event.append(seg)
+
+    return segments_with_event
+
