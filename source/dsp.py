@@ -433,6 +433,9 @@ def remove_segments_without_events(segments, events):
     Returns:
         list[dict]: A filtered list of segments that contain at least one event.
     """
+    if not events:
+        return False
+
     def overlaps(seg_start, seg_end, evt_start, evt_end):
         # Two intervals overlap if they intersect at all
         return not (evt_end <= seg_start or evt_start >= seg_end)
@@ -443,8 +446,50 @@ def remove_segments_without_events(segments, events):
         seg_end = seg["end_time"]
 
         # Check if any event overlaps this segment
+        if not events: print('events = None')
         if any(overlaps(seg_start, seg_end, e_start, e_end) for e_start, e_end in events):
             segments_with_event.append(seg)
 
     return segments_with_event
+
+import numpy as np
+
+def pad_audio_end(audio: np.ndarray, sr: int, desired_length_s: float):
+    """
+    Pads an audio signal at the end to reach the desired length.
+
+    Parameters
+    ----------
+    audio : np.ndarray
+        Input audio array (1D or 2D with shape (channels, samples)).
+    sr : int
+        Sampling rate in Hz.
+    desired_length_s : float
+        Desired length of the audio in seconds.
+
+    Returns
+    -------
+    padded_audio : np.ndarray
+        Audio array padded at the end to the desired length.
+    pad_end_s : float
+        Amount of padding added at the end in seconds.
+    """
+    target_length = int(desired_length_s * sr)
+    current_length = audio.shape[-1]
+
+    if current_length >= target_length:
+        # Trim if already longer than target
+        return audio[..., :target_length], 0.0
+
+    pad_end = target_length - current_length
+
+    if audio.ndim == 1:
+        padded_audio = np.pad(audio, (0, pad_end), mode='constant')
+    else:
+        padded_audio = np.pad(audio, ((0, 0), (0, pad_end)), mode='constant')
+
+    pad_end_s = pad_end / sr
+    return padded_audio, pad_end_s
+
+
 

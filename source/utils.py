@@ -1,10 +1,51 @@
-from datasets import concatenate_datasets
+from datasets import concatenate_datasets, Features, Sequence
 from pathlib import Path
 import json
 import os
 import pandas as pd
 import numpy as np
 from collections import Counter
+import random
+from collections import defaultdict
+from functools import wraps
+from librosa import resample
+
+from dsp import duration_s_to_num_samples
+
+def with_random_state(func):
+    """
+    Decorator that allows a function to accept random_state parameter.
+    The function can accept either a seed (int) or a state tuple.
+    """
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        # Extract random_state from kwargs
+        random_state = kwargs.pop('random_state', None)
+        
+        if random_state is None:
+            # No state provided, call function normally
+            return func(*args, **kwargs)
+        
+        # Save current state
+        current_state = random.getstate()
+        
+        try:
+            # Set the provided state
+            if isinstance(random_state, int):
+                # It's a seed
+                random.seed(random_state)
+            else:
+                # It's a state tuple
+                random.setstate(random_state)
+            
+            # Call the original function
+            return func(*args, **kwargs)
+        
+        finally:
+            # Restore original state
+            random.setstate(current_state)
+    
+    return wrapper
 
 def process_in_batches(dataset, process_fn, cache_dir, prefix="", batch_size=100, remove_columns=None):
     """
@@ -36,21 +77,21 @@ def process_in_batches(dataset, process_fn, cache_dir, prefix="", batch_size=100
     print(f"Concatenating {len(processed_datasets)} batches...")
     return concatenate_datasets(processed_datasets)
 
-def validate_species_tag(birdset_id, birdset_subset, birdnetlib_detection=None, scientific_name=None, common_name=None):
+def validate_species_tag(birdset_code, birdset_subset, birdnetlib_detection=None, scientific_name=None, common_name=None):
     """
     Takes the birdset label which is an id, the birdset subset used and a birdnetlib detection or scientific name/common name. 
     It gives back True or False depending on birdset label and birdnetlib detection or given names refer to the same species.
     If Birdnetlib detection is given, it is given priority over common name and scientific name.
 
     Parameters:
-        birdset_id: int
+        birdset_code: int
         birdset_subset: str
         birdnetlibn_dection: dict
 
     Returns:
         True or False based on species tags matching, birdset label, birdnet detection
     """
-    ebird_code, birdset_common_name, birdset_sci_name = birdset_id_to_ebird_taxonomy(birdset_id, birdset_subset)
+    ebird_code, birdset_common_name, birdset_sci_name = birdset_code_to_ebird_taxonomy(birdset_code, birdset_subset)
     birdset_label = birdset_common_name + ', ' + birdset_sci_name
 
     if birdnetlib_detection:
@@ -66,14 +107,14 @@ def validate_species_tag(birdset_id, birdset_subset, birdnetlib_detection=None, 
 
     return validated, birdset_label, comparision_label
 
-def validate_species_tag_multi(birdset_ids, birdset_subset, birdnetlib_detection=None, scientific_name=None, common_name=None):
+def validate_species_tag_multi(birdset_codes, birdset_subset, birdnetlib_detection=None, scientific_name=None, common_name=None):
     """
-    Takes the birdset label which is an id, the birdset subset used and a birdnetlib detection or scientific name/common name. 
-    It gives back True or False depending on birdset label and birdnetlib detection or given names refering to the same species.
+    Takes in birdset codes, the birdset subset used and a birdnetlib detection or scientific name/common name. 
+    It gives back True or False depending on one of the birdset codes and the birdnetlib detection or given names refering to the same species.
     If Birdnetlib detection is given, it is given priority over common name and scientific name.
 
     Parameters:
-        birdset_id: int
+        birdset_codes: list of int
         birdset_subset: str
         birdnetlibn_dection: dict
 
@@ -83,11 +124,11 @@ def validate_species_tag_multi(birdset_ids, birdset_subset, birdnetlib_detection
     if common_name: common_name = normalize_name(common_name)
     if scientific_name: scientific_name = normalize_name(scientific_name)
 
-    for birdset_id in birdset_ids:
-        ebird_code, birdset_common_name, birdset_sci_name = birdset_id_to_ebird_taxonomy(birdset_id, birdset_subset)
+    for birdset_code in birdset_codes:
+        ebird_code, birdset_common_name, birdset_sci_name = birdset_code_to_ebird_taxonomy(birdset_code, birdset_subset)
         birdset_common_name = normalize_name(birdset_common_name)
         birdset_sci_name = normalize_name(birdset_sci_name)
-        birdset_label = birdset_common_name + ', ' + birdset_sci_name
+        # birdset_label = birdset_common_name + ', ' + birdset_sci_name
 
         if birdnetlib_detection:
             common_name = normalize_name(birdnetlib_detection['common_name'])
@@ -110,9 +151,9 @@ def validate_species_tag_multi(birdset_ids, birdset_subset, birdnetlib_detection
         else:
             validated = False
 
-        comparision_label = common_name + ', ' + scientific_name
+        comparison_label = common_name + ', ' + scientific_name
 
-        return validated, birdset_label, comparision_label
+        return validated, birdset_code, comparison_label
 
 def normalize_name(name):
     return name.strip().lower().replace(" ", "_")
@@ -120,12 +161,12 @@ def normalize_name(name):
 def get_audio_file_name(output_dir, filename, details):
     return f"{output_dir}{Path(filename).stem}_{details}.wav"
 
-def birdset_id_to_ebird_taxonomy(birdset_id, dataset_key):
+def birdset_code_to_ebird_taxonomy(birdset_code, dataset_key):
     # Load BirdSet label mapping
     with open(f"resources/birdset_ebird_codes/{dataset_key}_ebird_codes.json") as f:
         birdset_labels = json.load(f)
 
-    ebird_code = birdset_labels['id2label'][str(birdset_id)]
+    ebird_code = birdset_labels['id2label'][str(birdset_code)]
 
     # Load the official eBird taxonomy file
     tax = pd.read_csv("resources/ebird_taxonomy_v2024.csv")
@@ -200,7 +241,7 @@ def get_best_source_idx(list_of_detections_per_source, birdset_example=None, bir
     #             scientific_name, is_dominant = check_dominant_species(detections)
 
     #             # check if species is in BirdSet labels
-    #             validate_species_tag(birdset_id, birdset_subset, scientific_name=scientific_name)
+    #             validate_species_tag(birdset_code, birdset_subset, scientific_name=scientific_name)
 
     #              # extract all events (start, end) where detection is above threshold
     #              # and return it for later comparison with detected call bounds (compare time and species)
@@ -235,7 +276,7 @@ def get_validated_sources(list_of_detections_per_source, birdset_example, birdse
 
                 # check if species is in BirdSet labels
                 birdset_species_ids = [birdset_example['ebird_code']] + birdset_example['ebird_code_multilabel']
-                is_validated, _, _ = validate_species_tag_multi(birdset_species_ids, birdset_subset, scientific_name=dominant_species)
+                is_validated, birdset_code, comparison_label = validate_species_tag_multi(birdset_species_ids, birdset_subset, scientific_name=dominant_species)
 
                 if is_validated:
                     # extract all events (start, end) where detection is above threshold
@@ -247,7 +288,7 @@ def get_validated_sources(list_of_detections_per_source, birdset_example, birdse
                         raise ValueError("Expected not more than one match")
                    
                     if not same_species_indices:
-                        sources.append({'source_index': source_idx, 'scientific_name': dominant_species, 'detection_bounds': detection_bounds})
+                        sources.append({'source_index': source_idx, 'birdset_code': birdset_code, 'scientific_name': dominant_species, 'detection_bounds': detection_bounds})
                     else: 
                         # Replace source if the new one has more detections
                         same_species_idx = same_species_indices[0]
@@ -340,6 +381,288 @@ def extract_relevant_bounds(segment_start_time, segment_end_time, time_freq_boun
         relevant_bounds.append((relative_start, relative_end, low_f, high_f))
 
     return relevant_bounds
+
+def flatten_features(prefix: str, features: Features) -> Features:
+    flat = {}
+    for key, value in features.items():
+        flat[f"{prefix}_{key}"] = Sequence(value)
+    return Features(flat)
+
+def generate_mix_examples(raw_data, max_polyphony_degree, segment_length_in_s, sampling_rate, random_seed=None):
+
+    # Get segment lenght in samples
+    segment_length_in_samples = duration_s_to_num_samples(segment_length_in_s, sampling_rate)
+
+    # Create polyphony degree map and get initial value
+    polyphony_map = create_index_map_from_range(range(1, max_polyphony_degree + 1), random_state=random_seed)
+    polyphony_degree = pop_random_index(polyphony_map)
+
+    # init containers
+    raw_signals = []
+    raw_data_list = []
+    birdset_code_multilabel = []
+    original_filenames = set([])
+    
+
+    mix_id = 0
+
+    raw_data = list(raw_data)
+
+    while raw_data:
+
+        skipped_examples = []
+
+        for example in raw_data:
+
+            # Ommit using two files from the same file
+            original_filename = example['original_file']
+            if original_filename not in original_filenames:
+                original_filenames.add(original_filename)
+            else:
+                skipped_examples.append(example)
+                continue
+
+            # Collect signals up to polyphony degree
+            audio = example["audio"]
+            raw_signal = audio["array"]  # This is a float32 NumPy array
+
+            # Resample if necessary
+            raw_signal = resample(raw_signal, orig_sr=audio['sampling_rate'], target_sr=sampling_rate)
+
+            # If signal length below chosen segment duration in seconds, skip it
+            if raw_signal.size < segment_length_in_samples:
+                print(raw_signal.size)
+                print(f'Skipping segment due to insufficient length.')
+                continue
+
+            # If stereo, sum to mono
+            if raw_signal.ndim > 1:  
+                raw_signal = np.mean(raw_signal, axis=0)
+            raw_signals.append(raw_signal)
+            
+            raw_data_list.append(example)
+
+            birdset_code = example['birdset_code']
+            birdset_code_multilabel.append(birdset_code)
+
+            # Mix colleted signals
+            if len(birdset_code_multilabel) == polyphony_degree:  
+
+                # Trim to segment length
+                raw_signals = [a[:segment_length_in_samples] for a in raw_signals]
+
+                # Mix (sum all waveforms)
+                mixed_signal = np.sum(raw_signals, axis=0)
+
+                # Normalize to prevent clipping
+                mixed_signal = mixed_signal / np.max(np.abs(mixed_signal))
+
+                flattened_raw = flatten_raw_examples(raw_data_list)
+
+                mix_example = {
+                    "id": str(mix_id),
+                    "audio": mixed_signal.copy(),
+                    "sampling_rate": int(sampling_rate),
+                    "polyphony_degree": int(polyphony_degree),
+                    "birdset_code_multilabel": birdset_code_multilabel[:],
+                    **flattened_raw.copy()
+                }
+                yield mix_example
+
+                # Reset mixing stage
+                mix_id += 1
+
+                raw_signals = []
+                raw_data_list = []
+                birdset_code_multilabel = []
+                original_filenames = set([])
+
+                # Check if all polyphony degrees have been used
+                if (all(polyphony_map.values())):
+                    reset_index_map(polyphony_map)
+                
+                polyphony_degree = pop_random_index(polyphony_map)
+
+        previous_len = len(raw_data)
+        raw_data = skipped_examples
+        if len(raw_data) == previous_len:
+            print("Warning: some examples could not be used (possibly all too short or duplicate filenames).")
+            break
+
+def generate_batches(raw_data, max_polyphony_degree, segment_length_in_s, sampling_rate, batch_size=100, random_seed=None):
+    batch = []
+    for example in generate_mix_examples(raw_data, max_polyphony_degree, segment_length_in_s, sampling_rate, random_seed):
+        batch.append(example)
+        if len(batch) == batch_size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+
+@with_random_state
+def create_index_map(num_indices, random_state=None):
+    '''
+            Creates dictionary of integers and booleans corresponding to used and unused indices initialized to False. 
+    
+            :param num_indices: Number of indices of the dict to create
+            :type num_indices: int
+            
+            :return: Dictionary with indices as keys and booleans as values
+            :rtype: dict of int: bool
+    '''
+
+    # Handle random state if provided
+    if random_state is not None:
+        current_state = None
+        if isinstance(random_state, int):
+            # It's a seed
+            current_state = random.getstate()
+            random.seed(random_state)
+        else:
+            # It's a state tuple
+            current_state = random.getstate()
+            random.setstate(random_state)
+    try:
+        # Setup index map
+        indices = list(range(num_indices))
+        random.shuffle(indices)
+        index_map = dict(zip(indices, [False] * len(indices)))
+        return index_map
+    finally:
+        # Restore original state if changed
+        if random_state is not None and current_state is not None:
+            random.setstate(current_state)
+
+@with_random_state
+def create_index_map_from_range(range):
+    '''
+            Creates dictionary of integers and booleans corresponding to used and unused indices initialized to False. 
+    
+            :param num_indices: Number of indices of the dict to create
+            :type num_indices: int
+            
+            :return: Dictionary with indices as keys and booleans as values
+            :rtype: dict of int: bool
+    '''
+
+    # Setup random indexing
+    indices = list(range)
+    random.shuffle(indices)
+    index_map = dict(zip(indices, [False] * len(indices)))
+    return index_map
+
+def pop_random_index(index_map):
+    '''
+            Gets next false key from index map and sets it to True. 
+            
+            :return: Pseudo random index
+            :rtype: int
+    '''
+    # Find the keys where the value is False
+    false_keys = [key for key, value in index_map.items() if value is False]
+
+    first_key = false_keys[0]
+
+    index_map[first_key] = True
+
+    return first_key
+
+def reset_index_map(index_map):
+    '''
+            Resets the index map by setting all values to False
+    '''
+    for key, value in index_map.items():
+        index_map[key] = False
+
+def flatten_raw_examples(raw_examples):
+    flattened = defaultdict(list)
+    for ex in raw_examples:
+        for key, val in ex.items():
+            flattened[f"raw_files_{key}"].append(val)
+    return dict(flattened)
+
+import random
+from datasets import Dataset
+
+import random
+from datasets import Dataset
+
+def balance_dataset_by_species(dataset, method="undersample", seed=42, max_per_file=None):
+    """
+    Balances a Hugging Face dataset so all 'scientific_name' classes have equal representation.
+
+    Parameters:
+        dataset: datasets.Dataset
+            Input dataset with 'scientific_name' and optionally 'original_file' columns.
+        method: str
+            'undersample', 'oversample', or 'controlled_oversample'.
+        seed: int
+            Random seed for reproducibility.
+        max_per_file: int or None
+            If using 'controlled_oversample', this limits how many samples can come
+            from the same 'original_file' (to avoid excessive duplication).
+
+    Returns:
+        A new balanced Hugging Face dataset.
+    """
+    if 'scientific_name' not in dataset.column_names:
+        raise ValueError("'scientific_name' column not found in dataset.")
+    if method == "controlled_oversample" and 'original_file' not in dataset.column_names:
+        raise ValueError("'original_file' column required for controlled_oversample method.")
+
+    random.seed(seed)
+
+    # Group indices by species
+    species_to_indices = {}
+    for idx, name in enumerate(dataset['scientific_name']):
+        species_to_indices.setdefault(name, []).append(idx)
+    
+    # Determine target count
+    counts = [len(indices) for indices in species_to_indices.values()]
+    if method == "undersample":
+        target_count = min(counts)
+    elif method in ["oversample", "controlled_oversample"]:
+        target_count = max(counts)
+    else:
+        raise ValueError("method must be 'undersample', 'oversample', or 'controlled_oversample'")
+
+    balanced_indices = []
+
+    for species, indices in species_to_indices.items():
+        if method == "undersample":
+            selected = random.sample(indices, target_count)
+        elif method == "oversample":
+            selected = random.choices(indices, k=target_count)
+        elif method == "controlled_oversample":
+            # Group by file within this species
+            file_to_indices = {}
+            for idx in indices:
+                file = dataset[idx]['original_file']
+                file_to_indices.setdefault(file, []).append(idx)
+
+            # Pool with per-file limit
+            pool = []
+            for idxs in file_to_indices.values():
+                if max_per_file is not None:
+                    # Limit per file
+                    pool.extend(random.sample(idxs, min(len(idxs), max_per_file)))
+                else:
+                    pool.extend(idxs)
+
+            # Oversample from limited pool
+            if len(pool) < target_count:
+                selected = random.choices(pool, k=target_count)
+            else:
+                selected = random.sample(pool, target_count)
+        else:
+            selected = indices  # fallback (should never happen)
+
+        balanced_indices.extend(selected)
+
+    random.shuffle(balanced_indices)
+    return dataset.select(balanced_indices)
+
+
 
 
     
