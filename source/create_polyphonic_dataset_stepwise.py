@@ -3,15 +3,18 @@
 # - BirdSet Dataset key (eg. 'HSN') [problem BirdSet necessary, ] or datasetpath?
 # - output_dir for dataset
 
-from datasets import load_from_disk, Dataset, Audio, Features, Sequence, Value, concatenate_datasets
+from datasets import load_from_disk, Dataset, Audio, Features, Sequence, Value, concatenate_datasets, load_dataset
 import tempfile
 from pathlib import Path
 import numpy as np
 from tqdm import tqdm
 import shutil
+import subprocess
+import random
+from functools import partial
 
-from source_separation import separate_audio
-from utils import validate_species_tag, get_most_confident_detection, get_best_source_idx, get_validated_sources, only_target_bird_detected, extract_relevant_bounds, flatten_features, generate_batches, balance_dataset_by_species, birdset_code_to_ebird_taxonomy
+from source_separation import separate_audio, load_separation_model
+from utils import validate_species_tag, get_most_confident_detection, get_best_source_idx, get_validated_sources, only_target_bird_detected, extract_relevant_bounds, flatten_features, generate_batches, balance_dataset_by_species, birdset_code_to_ebird_taxonomy, process_in_batches
 from dsp import analyze_with_birdnetlib, detect_call_bounds, stft_mask_bandpass, segment_audio, remove_segments_without_events, num_samples_to_duration_s, pad_audio_end
 
 
@@ -254,116 +257,181 @@ def main():
     # # Store/Load Raw Dataset/Subset
     # # ------------------------
     
-    # subset = raw_dataset.select(range(0, 1))
+    # #subset = raw_dataset.select(range(0, 1))
 
     # # Save raw dataset
     # print("")
-    # output_path = "datasets/raw_subset"
-    # subset.save_to_disk(output_path)
+    # output_path = "datasets/raw"
+    # raw_dataset.save_to_disk(output_path)
     # print(f"Saved raw dataset to {output_path}")
     # print("")
 
     
-    # print("Load raw subset from disk...")
-    # subset = load_from_disk('datasets/raw_subset')
-    # print(subset)
-    # print('')
+    print("Load raw subset from disk...")
+    subset = load_from_disk('datasets/raw')
+    print(subset)
+    print('')
 
-    # # ------------------------
-    # # Separate Audio 
-    # # ------------------------
+    # ------------------------
+    # Separate Audio 
+    # ------------------------
 
     # Save the current cache path
-    # original_cache = datasets.config.HF_DATASETS_CACHE
+    #original_cache = datasets.config.HF_DATASETS_CACHE
 
-    # # Load source separation model
-    # session, input_node, output_node = load_separation_model(model_dir="resources/bird_mixit_model_checkpoints/output_sources4", 
-    #                         checkpoint="resources/bird_mixit_model_checkpoints/output_sources4/model.ckpt-3223090")
-    # separation_session_data = (session, input_node, output_node)
+    # Load source separation model
+    session, input_node, output_node = load_separation_model(model_dir="resources/bird_mixit_model_checkpoints/output_sources4", 
+                            checkpoint="resources/bird_mixit_model_checkpoints/output_sources4/model.ckpt-3223090")
+    separation_session_data = (session, input_node, output_node)
 
-    # # Store with on-/offset, frequency bounds in original file
-    # with tempfile.TemporaryDirectory() as temp_cache_dir:
+    # Store with on-/offset, frequency bounds in original file
+    with tempfile.TemporaryDirectory() as temp_cache_dir:
 
-    #     separate_fn = partial(
-    #         separate_example,
-    #         separation_session_data=separation_session_data
-    #     )
+        separate_fn = partial(
+            separate_example,
+            separation_session_data=separation_session_data
+        )
 
-    #     separated_dataset = process_in_batches(
-    #                     subset,
-    #                     process_fn=separate_fn,
-    #                     cache_dir=temp_cache_dir,
-    #                 )
+        separated_dataset = process_in_batches(
+                        subset,
+                        process_fn=separate_fn,
+                        cache_dir=temp_cache_dir,
+                    )
         
-    # print(separated_dataset)
+    print(separated_dataset)
 
-    # # Save preprocessed dataset
-    # output_path = "datasets/separated_subset"
-    # separated_dataset.save_to_disk(output_path)
-    # print("")
-    # print(f"Saved separated dataset to {output_path}")
-    # print("")
+    # Save preprocessed dataset
+    output_path = "datasets/separated"
+    separated_dataset.save_to_disk(output_path)
+    print("")
+    print(f"Saved separated dataset to {output_path}")
+    print("")
 
-    # separated_dataset = load_from_disk('datasets/separated_subset')
+    separated_dataset = load_from_disk('datasets/separated')
 
-    # # ------------------------------
-    # # Segment sources
-    # # ------------------------------
+    # ------------------------------
+    # Segment sources
+    # ------------------------------
 
-    # segments_dataset_rows = {
-    # "audio": [],
-    # "time_freq_bounds": [],
-    # "birdset_code": [],
-    # "ebird_code": [],
-    # "scientific_name": [],
-    # "common_name": [],
-    # "original_birdset_subset": [],
-    # "original_file": []
-    # }
+    segments_dataset_rows = {
+    "audio": [],
+    "time_freq_bounds": [],
+    "birdset_code": [],
+    "ebird_code": [],
+    "scientific_name": [],
+    "common_name": [],
+    "original_birdset_subset": [],
+    "original_file": []
+    }
 
-    # for example in tqdm(separated_dataset):
-    #     segments = extract_segments_from_example(example, birdset_subset="HSN")
-    #     if segments:
-    #         for row in segments:  # each row is a dict with a single audio dict
-    #             segments_dataset_rows["audio"].append(row["audio"])
-    #             segments_dataset_rows["time_freq_bounds"].append(row["time_freq_bounds"])
-    #             segments_dataset_rows["ebird_code"].append(row["ebird_code"])
-    #             segments_dataset_rows["birdset_code"].append(row["birdset_code"])
-    #             segments_dataset_rows["scientific_name"].append(row["scientific_name"])
-    #             segments_dataset_rows["common_name"].append(row["common_name"])
-    #             segments_dataset_rows["original_birdset_subset"].append(row["original_birdset_subset"])
-    #             segments_dataset_rows["original_file"].append(row["original_file"])
+    for example in tqdm(separated_dataset):
+        segments = extract_segments_from_example(example, birdset_subset="HSN")
+        if segments:
+            for row in segments:  # each row is a dict with a single audio dict
+                segments_dataset_rows["audio"].append(row["audio"])
+                segments_dataset_rows["time_freq_bounds"].append(row["time_freq_bounds"])
+                segments_dataset_rows["ebird_code"].append(row["ebird_code"])
+                segments_dataset_rows["birdset_code"].append(row["birdset_code"])
+                segments_dataset_rows["scientific_name"].append(row["scientific_name"])
+                segments_dataset_rows["common_name"].append(row["common_name"])
+                segments_dataset_rows["original_birdset_subset"].append(row["original_birdset_subset"])
+                segments_dataset_rows["original_file"].append(row["original_file"])
 
-    # segments_dataset = Dataset.from_dict(segments_dataset_rows)
+    segments_dataset = Dataset.from_dict(segments_dataset_rows)
     
-    # # --------------------------
-    # # Store Preprocessed Dataset
-    # # --------------------------
+    # --------------------------
+    # Store Preprocessed Dataset
+    # --------------------------
     
-    # # Save preprocessed dataset
-    # output_path = "datasets/segments_subset"
-    # segments_dataset.save_to_disk(output_path)
-    # print("")
-    # print(f"Saved segments dataset to {output_path}")
-    # print("")
+    # Save preprocessed dataset
+    output_path = "datasets/segments"
+    segments_dataset.save_to_disk(output_path)
+    print("")
+    print(f"Saved segments dataset to {output_path}")
+    print("")
+
+    # --------------------------
+    # Get noise files
+    # --------------------------
+
+    birdset_subset = 'HSN'
+    split = 'test_5s'
+    output_path = 'datasets/soundscape_dataset'
+
+    # TODO: directly filter in subprocess to not store original dataset
+    cmd = [
+            "conda", "run", "-n", "birdset",
+            "python", 
+            #"/Users/maltecohrt/miniconda3/envs/birdset/bin/python",
+            "source/load_birdset_dataset.py",
+            "--birdset_subset", str(birdset_subset),
+            "--split", str(split),
+            "--output_path", str(output_path)
+        ]
+
+    # Run subprocess
+    subprocess.run(cmd)
+
+    soundscape_dataset = load_from_disk(output_path)
+
+    # Assuming you've already loaded your dataset
+    soundscape_dataset = soundscape_dataset.cast_column("audio", Audio(sampling_rate=32000))
+
+    # Step 1: Create a boolean mask for "no bird" examples
+    def is_no_bird(example):
+        return example['ebird_code'] is None and example['ebird_code_multilabel'] == []
+
+    no_bird_mask = [is_no_bird(ex) for ex in soundscape_dataset]
+
+    # Step 2: Get indices of "no bird" examples
+    no_bird_indices = [i for i, flag in enumerate(no_bird_mask) if flag]
+
+    # Step 3: Randomly select half of those for augmentation
+    n = len(no_bird_indices)
+    selected_no_bird_indices = set(random.sample(no_bird_indices, n // 2))
+
+    # Step 4: Split dataset
+    # - no_bird_for_aug: subset with selected "no bird" examples
+    # - soundscape_dataset_filtered: dataset with those removed
+    no_bird_for_aug = soundscape_dataset.select(list(selected_no_bird_indices))
+    soundscape_dataset_filtered = soundscape_dataset.filter(
+        lambda _, idx: idx not in selected_no_bird_indices,
+        with_indices=True
+    )
+
+    print(f"Original dataset: {len(soundscape_dataset)} examples")
+    print(f"Extracted no-call examples: {len(no_bird_for_aug)}")
+    print(f"Filtered dataset: {len(soundscape_dataset_filtered)}")
+
+    no_bird_dataset_path = 'datasets/no_bird'
+    filtered_soundscape_dataset_path = 'datasets/filtered_soundscape'
+
+    no_bird_for_aug.save_to_disk(no_bird_dataset_path)
+    soundscape_dataset_filtered.save_to_disk(filtered_soundscape_dataset_path)
 
     # ------------------------
     # Mix Audio 
     # ------------------------
 
-     # Load raw dataset
-    segments_data = load_from_disk('datasets/segments_subset')
+    #  # Load segements dataset
+    segments_data = load_from_disk('datasets/segments')
     sampling_rate = segments_data[0]['audio']['sampling_rate']
-    segments_data = segments_data.cast_column("audio", Audio(sampling_rate=sampling_rate))
+    # segments_data = segments_data.cast_column("audio", Audio(sampling_rate=sampling_rate))
+
+    # Balance dataset
     balanced_dataset = balance_dataset_by_species(segments_data)
     print(balanced_dataset)
 
-     # Save preprocessed dataset
-    output_path = "datasets/balanced_subset"
+    # Load no bird dataset
+    no_bird_dataset = load_from_disk(no_bird_dataset_path)
+
+    #  # Save balanced dataset
+    output_path = "datasets/balanced"
     balanced_dataset.save_to_disk(output_path)
     print("")
     print(f"Saved balanced dataset to {output_path}")
     print("")
+    balanced_dataset = load_from_disk("datasets/balanced")
 
     # Setup features
     raw_features = balanced_dataset.features
@@ -375,6 +443,7 @@ def main():
         "sampling_rate": Value("int32"),
         "polyphony_degree": Value("int32"),
         "birdset_code_multilabel": Sequence(Value("int32")),
+        "noise_file": Value("string"),
         **flattened_raw_features
     })
 
@@ -386,7 +455,7 @@ def main():
     random_seed = 42
 
     temp_dirs = []
-    for i, batch in enumerate(generate_batches(balanced_dataset, 
+    for i, batch in enumerate(generate_batches(balanced_dataset, no_bird_dataset,
                                                max_polyphony_degree, segment_length_in_s, 
                                                sampling_rate, random_seed=random_seed)):
         ds = Dataset.from_list(batch, features=mix_features)
@@ -402,7 +471,7 @@ def main():
     full_dataset = concatenate_datasets(datasets)
 
     # Save final dataset
-    polyphonic_dataset_path = 'datasets/polyphonic_subset'
+    polyphonic_dataset_path = 'datasets/polyphonic'
     full_dataset.save_to_disk(polyphonic_dataset_path)
     print(f'Saved mixed dataset to {polyphonic_dataset_path}', flush=True)
 

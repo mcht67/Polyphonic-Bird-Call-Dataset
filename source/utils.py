@@ -388,7 +388,7 @@ def flatten_features(prefix: str, features: Features) -> Features:
         flat[f"{prefix}_{key}"] = Sequence(value)
     return Features(flat)
 
-def generate_mix_examples(raw_data, max_polyphony_degree, segment_length_in_s, sampling_rate, random_seed=None):
+def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, segment_length_in_s, sampling_rate, random_seed=None):
 
     # Get segment lenght in samples
     segment_length_in_samples = duration_s_to_num_samples(segment_length_in_s, sampling_rate)
@@ -402,7 +402,6 @@ def generate_mix_examples(raw_data, max_polyphony_degree, segment_length_in_s, s
     raw_data_list = []
     birdset_code_multilabel = []
     original_filenames = set([])
-    
 
     mix_id = 0
 
@@ -448,6 +447,21 @@ def generate_mix_examples(raw_data, max_polyphony_degree, segment_length_in_s, s
             # Mix colleted signals
             if len(birdset_code_multilabel) == polyphony_degree:  
 
+                # Check if still noise files left
+                if not mix_id < len(noise_data):
+                    print("Used all noise files!")
+                    break
+
+                 # Get noise signal
+                noise_array = noise_data[mix_id]['audio']['array']
+                noise_sampling_rate = noise_data[mix_id]['audio']['sampling_rate']
+                noise_signal = resample(noise_array, orig_sr=noise_sampling_rate, target_sr=sampling_rate)
+                noise_file = Path(noise_data[mix_id]['filepath']).name
+                noise_signal = noise_signal * 10
+                
+                # Append noise signal
+                raw_signals.append(noise_signal)
+                
                 # Trim to segment length
                 raw_signals = [a[:segment_length_in_samples] for a in raw_signals]
 
@@ -465,6 +479,7 @@ def generate_mix_examples(raw_data, max_polyphony_degree, segment_length_in_s, s
                     "sampling_rate": int(sampling_rate),
                     "polyphony_degree": int(polyphony_degree),
                     "birdset_code_multilabel": birdset_code_multilabel[:],
+                    "noise_file": noise_file,
                     **flattened_raw.copy()
                 }
                 yield mix_example
@@ -486,12 +501,14 @@ def generate_mix_examples(raw_data, max_polyphony_degree, segment_length_in_s, s
         previous_len = len(raw_data)
         raw_data = skipped_examples
         if len(raw_data) == previous_len:
-            print("Warning: some examples could not be used (possibly all too short or duplicate filenames).")
+            print([e['original_file']for e in raw_data])
+            print(f'polyphony degree: {polyphony_degree}')
+            print("Warning: some examples could not be used (possibly all too short or duplicate filenames or amount of files is not enough to reach polyphony degree).")
             break
 
-def generate_batches(raw_data, max_polyphony_degree, segment_length_in_s, sampling_rate, batch_size=100, random_seed=None):
+def generate_batches(raw_data, noise_data, max_polyphony_degree, segment_length_in_s, sampling_rate, batch_size=100, random_seed=None):
     batch = []
-    for example in generate_mix_examples(raw_data, max_polyphony_degree, segment_length_in_s, sampling_rate, random_seed):
+    for example in generate_mix_examples(raw_data, noise_data, max_polyphony_degree, segment_length_in_s, sampling_rate, random_seed):
         batch.append(example)
         if len(batch) == batch_size:
             yield batch
