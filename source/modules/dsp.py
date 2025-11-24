@@ -10,7 +10,7 @@ from scipy.ndimage import uniform_filter1d
 import re
 import os
 
-def detect_call_bounds(audio_array,
+def detect_event_bounds(audio_array,
                        sr=22050,
                        smooth_ms=20,
                        threshold_ratio=0.2,
@@ -50,6 +50,10 @@ def detect_call_bounds(audio_array,
     if mask[-1]:
         offsets = np.r_[offsets, len(mask)]
 
+    # Ensure indices are within range
+    onsets = np.clip(onsets, 0, len(times) - 1)
+    offsets = np.clip(offsets, 0, len(times) - 1)
+
     if len(onsets) == 0:
         return None
 
@@ -75,7 +79,7 @@ def detect_call_bounds(audio_array,
     # 8. Return all regions in s
     return events
 
-def get_longest_call(events):
+def get_longest_event(events):
     # Return the longest region (main call)
     durations = [f - o for o, f in events]
     i = np.argmax(durations)
@@ -490,6 +494,131 @@ def pad_audio_end(audio: np.ndarray, sr: int, desired_length_s: float):
 
     pad_end_s = pad_end / sr
     return padded_audio, pad_end_s
+
+def calculate_rms(audio_array, sampling_rate, event_bounds=None):
+    """
+    Compute the RMS of a signal within specified time bounds.
+
+    Parameters
+    ----------
+    audio_array : np.ndarray
+        1D numpy array containing audio samples (float).
+    sampling_rate : int or float
+        Sampling rate of the audio signal in Hz.
+    event_bounds : list of tuple(float, float, float, float)
+        List of events as (start_time, end_time, f_low, f_high). f_low and f_high are ignored.
+        If None, RMS is computed over the entire signal.
+
+    Returns
+    -------
+    rms_value : float
+        RMS value of the signal within the combined event time windows.
+    """
+
+    if audio_array.ndim != 1:
+        raise ValueError("audio_array must be a 1D numpy array.")
+
+    if not event_bounds:
+        event_bounds = [(0, len(audio_array), None, None)]
+
+    total_energy = 0.0
+    total_samples = 0
+
+    for start_s, end_s, _, _ in event_bounds:
+        # Convert times to sample indices
+        start_i = int(np.floor(start_s * sampling_rate))
+        end_i = int(np.ceil(end_s * sampling_rate))
+
+        # Clamp indices to valid range
+        start_i = max(0, min(len(audio_array), start_i))
+        end_i = max(0, min(len(audio_array), end_i))
+
+        # Extract the segment
+        segment = audio_array[start_i:end_i]
+
+        # Accumulate energy and sample count
+        total_energy += np.sum(segment ** 2)
+        total_samples += len(segment)
+
+    if total_samples == 0:
+        raise ValueError("No valid samples found within the provided event bounds.")
+
+    rms_value = np.sqrt(total_energy / total_samples)
+    return rms_value
+
+import numpy as np
+
+def normalize_to_dBFS(audio_array, target_dBFS, current_rms):
+    """
+    Normalize an audio signal to a target RMS level in dBFS.
+
+    Parameters
+    ----------
+    audio_array : np.ndarray
+        1D numpy array of audio samples (float, typically -1.0 to 1.0).
+    target_dBFS : float
+        Desired RMS level in dBFS (e.g., 0, -3, -6, etc.).
+    current_rms : float
+        The current RMS value of the signal (computed over the relevant region).
+
+    Returns
+    -------
+    normalized_audio : np.ndarray
+        The audio signal scaled so that its RMS equals the target dBFS value.
+    """
+
+    if audio_array.ndim != 1:
+        raise ValueError("audio_array must be a 1D numpy array.")
+
+    if current_rms <= 0:
+        raise ValueError("current_rms must be positive and nonzero.")
+
+    # Convert dBFS target to linear RMS
+    target_rms_linear = dBFS_to_gain(target_dBFS)
+
+    # Compute gain factor
+    gain = target_rms_linear / current_rms
+
+    # Apply gain
+    normalized_audio = audio_array * gain
+
+    return normalized_audio, gain
+
+def dBFS_to_gain(dBFS_value):
+    """
+    Convert a dBFS (decibels relative to full scale) value to a linear amplitude gain factor.
+
+    Parameters
+    ----------
+    dBFS_value : float or np.ndarray
+        Level in decibels relative to full scale (dBFS). 
+    Returns
+    -------
+    gain : float or np.ndarray
+    """
+    return 10 ** (dBFS_value / 20.0)
+
+
+import numpy as np
+
+def gain_to_dBFS(gain):
+    """
+    Convert a linear amplitude gain factor to decibels relative to full scale (dBFS).
+
+    Parameters
+    ----------
+    gain : float or np.ndarray
+        Linear amplitude gain factor.
+        Must be positive and nonzero.
+
+    Returns
+    -------
+    dBFS_value : float or np.ndarray
+    """
+    if np.any(gain <= 0):
+        raise ValueError("Gain must be positive and nonzero to compute dBFS.")
+    return 20.0 * np.log10(gain)
+
 
 
 

@@ -10,7 +10,7 @@ from collections import defaultdict
 from functools import wraps
 from librosa import resample
 
-from dsp import duration_s_to_num_samples
+from dsp import duration_s_to_num_samples, calculate_rms, normalize_to_dBFS, dBFS_to_gain, num_samples_to_duration_s
 
 def with_random_state(func):
     """
@@ -393,9 +393,28 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, segment_le
     # Get segment lenght in samples
     segment_length_in_samples = duration_s_to_num_samples(segment_length_in_s, sampling_rate)
 
+    # Filter noise by length
+    min_duration_s = segment_length_in_s
+    filtered_noise_data = [
+        n for n in noise_data
+        if num_samples_to_duration_s(len(n['audio']['array']), n['audio']['sampling_rate']) >= min_duration_s
+    ]
+
+    print(f"Filtered noise dataset: kept {len(filtered_noise_data)} of {len(noise_data)} samples")
+
+
     # Create polyphony degree map and get initial value
     polyphony_map = create_index_map_from_range(range(1, max_polyphony_degree + 1), random_state=random_seed)
     polyphony_degree = pop_random_index(polyphony_map)
+
+    # Create signal level map
+    #signal_levels_map = create_index_map_from_range(range(-6,0), random_state=random_seed)
+
+    # Create SNR map
+    snr_map = create_index_map_from_range(range(-12, 12), random_state=random_seed) 
+
+    # Create final mix level map
+    mix_levels_map = create_index_map_from_range(range(-12, -6), random_state=random_seed) 
 
     # init containers
     raw_signals = []
@@ -423,7 +442,8 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, segment_le
 
             # Collect signals up to polyphony degree
             audio = example["audio"]
-            raw_signal = audio["array"]  # This is a float32 NumPy array
+            raw_signal = np.array(audio["array"])  # This is a float32 NumPy array
+            signal_sampling_rate = audio["sampling_rate"]
 
             # Resample if necessary
             raw_signal = resample(raw_signal, orig_sr=audio['sampling_rate'], target_sr=sampling_rate)
@@ -437,27 +457,81 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, segment_le
             # If stereo, sum to mono
             if raw_signal.ndim > 1:  
                 raw_signal = np.mean(raw_signal, axis=0)
-            raw_signals.append(raw_signal)
+
+            # Calculate RMS for event bounds
+            event_bounds = example["time_freq_bounds"]
+            event_rms = calculate_rms(raw_signal, signal_sampling_rate, event_bounds)
+            example["event_rms"] = event_rms
             
+            # Normalize file to 0 dBFS / RMS = 1
+            normalized_signal, signal_norm_gain = normalize_to_dBFS(raw_signal, 0, event_rms)
+            example["norm_gain"] = signal_norm_gain
+
+            # Get relative volume in dBFS
+            # Use first signal as reference with 0 dBFS
+            # else apply random gain between -12 and 0 dBFS
+            if not raw_signals:
+                signal_dBFS = 0
+            else:
+                signal_dBFS = random.randrange(-12,0)
+            example["relative_dBFS"] = signal_dBFS
+
+            # Calculate and apply linear gain factors
+            signal_gain = dBFS_to_gain(signal_dBFS)
+            example["gain"] = signal_gain
+            leveled_signal = signal_gain * normalized_signal
+
+            # TODO: Check if signal is long enough and pad if not
+            if len(leveled_signal) < segment_length_in_samples:
+                padding_length = segment_length_in_samples - len(leveled_signal)
+                leveled_signal = np.pad(leveled_signal, (0, padding_length))
+
+            # Append Signal    
+            raw_signals.append(leveled_signal)
             raw_data_list.append(example)
 
             birdset_code = example['birdset_code']
             birdset_code_multilabel.append(birdset_code)
 
             # Mix colleted signals
-            if len(birdset_code_multilabel) == polyphony_degree:  
+            if len(birdset_code_multilabel) == polyphony_degree:
+
+                # Check if all mix levels have been used
+                if (all(mix_levels_map.values())):
+                    reset_index_map(mix_levels_map)
+
+                # Check if all snr levels have been used
+                if (all(snr_map.values())):
+                    reset_index_map(snr_map)
 
                 # Check if still noise files left
-                if not mix_id < len(noise_data):
+                if not mix_id < len(filtered_noise_data):
                     print("Used all noise files!")
                     break
 
                  # Get noise signal
-                noise_array = noise_data[mix_id]['audio']['array']
-                noise_sampling_rate = noise_data[mix_id]['audio']['sampling_rate']
+                noise_array = filtered_noise_data[mix_id]['audio']['array']
+                noise_sampling_rate = filtered_noise_data[mix_id]['audio']['sampling_rate']
                 noise_signal = resample(noise_array, orig_sr=noise_sampling_rate, target_sr=sampling_rate)
-                noise_file = Path(noise_data[mix_id]['filepath']).name
-                noise_signal = noise_signal * 10
+                noise_file = Path(filtered_noise_data[mix_id]['filepath']).name
+                # noise_signal = noise_signal * 10
+
+                # Normalize noise to 0 dBFS / RMS = 1
+                noise_orig_rms = calculate_rms(noise_signal, sampling_rate)
+                noise_signal, noise_norm_gain = normalize_to_dBFS(noise_signal, 0, noise_orig_rms)
+
+                # Get relative SNR in dBFS
+                noise_dBFS = pop_random_index(snr_map)
+
+                # Calculate and apply linear gain factor
+                noise_gain = dBFS_to_gain(noise_dBFS)
+                noise_signal *= noise_gain
+
+                # TODO: Check if noise is long enough
+                if len(noise_signal) < segment_length_in_samples:
+                    print(len(noise_signal))
+                    print(num_samples_to_duration_s(len(noise_signal), sampling_rate))
+                    raise ValueError("Noise signal is too short to be mixed properly.")
                 
                 # Append noise signal
                 raw_signals.append(noise_signal)
@@ -468,18 +542,31 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, segment_le
                 # Mix (sum all waveforms)
                 mixed_signal = np.sum(raw_signals, axis=0)
 
-                # Normalize to prevent clipping
-                mixed_signal = mixed_signal / np.max(np.abs(mixed_signal))
+                # TODO: Get mix level in dBFS
+                mix_orig_rms = calculate_rms(mixed_signal, sampling_rate)
+                mix_dBFS = pop_random_index(mix_levels_map)
+
+                # TODO: Normalize to desired dBFS prevent clipping
+                mixed_signal, mix_gain = normalize_to_dBFS(mixed_signal, mix_dBFS, mix_orig_rms)
+                
+                #mixed_signal = mixed_signal / np.max(np.abs(mixed_signal))
 
                 flattened_raw = flatten_raw_examples(raw_data_list)
 
                 mix_example = {
                     "id": str(mix_id),
-                    "audio": mixed_signal.copy(),
-                    "sampling_rate": int(sampling_rate),
+                    "audio": {'array': mixed_signal.copy(), 'sampling_rate': int(sampling_rate)},
+                    # "sampling_rate": int(sampling_rate),
                     "polyphony_degree": int(polyphony_degree),
                     "birdset_code_multilabel": birdset_code_multilabel[:],
                     "noise_file": noise_file,
+                    "noise_orig_rms": noise_orig_rms,
+                    "noise_dBFS": noise_dBFS,
+                    "noise_norm_gain": noise_norm_gain,
+                    "noise_gain": noise_gain,
+                    "mix_orig_rms": mix_orig_rms,
+                    "mix_dBFS": mix_dBFS,
+                    "mix_gain": mix_gain,
                     **flattened_raw.copy()
                 }
                 yield mix_example
@@ -555,8 +642,8 @@ def create_index_map_from_range(range):
     '''
             Creates dictionary of integers and booleans corresponding to used and unused indices initialized to False. 
     
-            :param num_indices: Number of indices of the dict to create
-            :type num_indices: int
+            :param range: Range of indices of the dict to create
+            :type range: range
             
             :return: Dictionary with indices as keys and booleans as values
             :rtype: dict of int: bool
