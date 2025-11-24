@@ -1,0 +1,55 @@
+from datasets import load_dataset
+from omegaconf import OmegaConf
+import random
+
+def is_no_bird(example):
+        return example['ebird_code'] is None and example['ebird_code_multilabel'] == []
+
+def separate_to_noise_and_test_split(soundscape_dataset):
+
+     # Step 1: Create a boolean mask for "no bird" examples
+    no_bird_mask = [is_no_bird(ex) for ex in soundscape_dataset]
+
+    # Step 2: Get indices of "no bird" examples
+    no_bird_indices = [i for i, flag in enumerate(no_bird_mask) if flag]
+
+    # Step 3: Randomly select half of those 
+    n = len(no_bird_indices)
+    selected_no_bird_indices = set(random.sample(no_bird_indices, n // 2))
+
+    # Step 4: Split dataset
+    # - no_bird_for_aug: subset with selected "no bird" examples
+    # - soundscape_dataset_filtered: dataset with those removed
+    noise_dataset = soundscape_dataset.select(list(selected_no_bird_indices))
+    soundscape_dataset_filtered = soundscape_dataset.filter(
+        lambda _, idx: idx not in selected_no_bird_indices,
+        with_indices=True
+    )
+
+    return noise_dataset, soundscape_dataset_filtered
+
+def main():
+    
+    # Load the parameters from the config file
+    cfg = OmegaConf.load("config.yaml")
+    dataset_name = cfg.dataset.name
+
+    # Load Xeno Canto data
+    xc_subset_name = dataset_name + '_xc'
+    raw_dataset = load_dataset('DBD-research-group/BirdSet', xc_subset_name, split='train', trust_remote_code=True)
+
+    # Load soundscape data
+    soundscape_subset_name = dataset_name +'_scape'
+    soundscape_dataset = load_dataset('DBD-research-group/BirdSet', soundscape_subset_name, split='test', trust_remote_code=True)
+
+    # Get augmentation and test split
+    noise_dataset, test_dataset = separate_to_noise_and_test_split(soundscape_dataset)
+
+    # Store datasets
+    dataset_path = 'datasets/' + dataset_name + '/'
+    raw_dataset.save_to_disk(dataset_path + 'raw/')
+    test_dataset.save_to_disk(dataset_name + 'test/')
+    noise_dataset.save_to_disk(dataset_name + 'noise/')
+
+if __name__ == '__main__':
+  main()
