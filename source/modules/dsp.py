@@ -311,79 +311,6 @@ def plot_save_mel_spectrogram(audio_array, sampling_rate, filename=None, details
 
         print(f"Saved Mel spectrogram to: {save_path}")
 
-def analyze_with_birdnetlib(audio_array, original_sampling_rate, birdnet_sampling_rate=48000, lat=None, lon=None):
-    """
-    Analyze audio array with BirdNETLib via a subprocess.
-
-    Parameters
-    ----------
-    audio_array : np.ndarray
-        Audio data.
-    original_sampling_rate : int
-        Sampling rate of the input audio.
-    birdnet_sampling_rate : int, optional
-        Sampling rate for BirdNETLib (default 48000).
-    lat : float or str, optional
-        Latitude for location filtering.
-    lon : float or str, optional
-        Longitude for location filtering.
-
-    Returns
-    -------
-    list or None
-        List of detections, or None if no detections found.
-    """
-    # Resample to 48 kHz
-    y = resample(audio_array, orig_sr=original_sampling_rate, target_sr=birdnet_sampling_rate)
-
-    # Save temporary .npy file
-    with tempfile.NamedTemporaryFile(suffix=".npy") as tmp_file:
-        np.save(tmp_file.name, y)
-
-        # Build the command
-        # TODO: remove python path and specify env instead
-        cmd = [
-            # "conda", "run", "-n", "birdnetlib",
-            # "python", 
-            "/Users/maltecohrt/miniconda3/envs/birdnetlib/bin/python",
-            "source/birdnetlib_inference.py",
-            "--array_file", tmp_file.name,
-            "--sr", str(birdnet_sampling_rate)
-        ]
-
-        if lat is not None:
-            cmd += ["--lat", str(lat)]
-        if lon is not None:
-            cmd += ["--lon", str(lon)]
-
-        # Run subprocess
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True
-        )
-
-        # Error handling for failed subprocess
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"Subprocess failed with return code {result.returncode}\n"
-                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
-            )
-
-        # Ensure stdout is captured
-        output = result.stdout
-        if output is None:
-            raise RuntimeError("No output captured from subprocess")
-
-        # Extract list of detections
-        # Extract the line containing the list of detections
-        match = re.search(r"(\[\{.*?\}\])", output, re.DOTALL)
-        if match:
-            detections = ast.literal_eval(match.group(1))
-        else:
-            detections = None
-
-        return detections
     
 def segment_audio(audio_array, sampling_rate, segment_length, keep_incomplete=False):
     """
@@ -618,6 +545,41 @@ def gain_to_dBFS(gain):
     if np.any(gain <= 0):
         raise ValueError("Gain must be positive and nonzero to compute dBFS.")
     return 20.0 * np.log10(gain)
+
+def extract_relevant_bounds(segment_start_time, segment_end_time, time_freq_bounds):
+    """
+    Extract and adjust time-frequency bounds relevant to a given audio segment.
+
+    Parameters:
+        segment_start_time (float): Start time of the segment (in seconds).
+        segment_end_time (float): End time of the segment (in seconds).
+        time_freq_bounds (list[tuple]): List of tuples
+                                        (start_time, end_time, low_freq, high_freq)
+                                        all in reference to the original file.
+
+    Returns:
+        list[tuple]: Relevant time-frequency bounds adjusted to be relative
+                     to the start of the segment.
+                     Format: (adj_start_time, adj_end_time, low_freq, high_freq)
+    """
+    relevant_bounds = []
+
+    for start, end, low_f, high_f in time_freq_bounds:
+        # Check overlap with segment
+        if end <= segment_start_time or start >= segment_end_time:
+            continue  # no overlap
+
+        # Clip to the segment window
+        clipped_start = max(start, segment_start_time)
+        clipped_end = min(end, segment_end_time)
+
+        # Shift so times are relative to the segment
+        relative_start = clipped_start - segment_start_time
+        relative_end = clipped_end - segment_start_time
+
+        relevant_bounds.append((relative_start, relative_end, low_f, high_f))
+
+    return relevant_bounds
 
 
 

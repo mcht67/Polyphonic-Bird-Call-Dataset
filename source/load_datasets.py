@@ -3,7 +3,7 @@ from omegaconf import OmegaConf
 import random
 
 def is_no_bird(example):
-        return example['ebird_code'] is None and example['ebird_code_multilabel'] == []
+        return example['ebird_code'] is None and example['ebird_code_multilabel'] == [] and example['ebird_code_secondary'] is None
 
 def separate_to_noise_and_test_split(soundscape_dataset):
 
@@ -18,7 +18,7 @@ def separate_to_noise_and_test_split(soundscape_dataset):
     selected_no_bird_indices = set(random.sample(no_bird_indices, n // 2))
 
     # Step 4: Split dataset
-    # - no_bird_for_aug: subset with selected "no bird" examples
+    # - noise_dataset: subset with selected "no bird" examples
     # - soundscape_dataset_filtered: dataset with those removed
     noise_dataset = soundscape_dataset.select(list(selected_no_bird_indices))
     soundscape_dataset_filtered = soundscape_dataset.filter(
@@ -40,16 +40,16 @@ def main():
 
     # Load soundscape data
     soundscape_subset_name = dataset_name +'_scape'
-    soundscape_dataset = load_dataset('DBD-research-group/BirdSet', soundscape_subset_name, split='test', trust_remote_code=True)
+    soundscape_5s_dataset = load_dataset('DBD-research-group/BirdSet', soundscape_subset_name, split='test_5s', trust_remote_code=True)
 
     # Get augmentation and test split
-    noise_dataset, test_dataset = separate_to_noise_and_test_split(soundscape_dataset)
+    noise_dataset, test_dataset = separate_to_noise_and_test_split(soundscape_5s_dataset)
 
     # Store datasets
     dataset_path = 'datasets/' + dataset_name + '/'
     raw_dataset.save_to_disk(dataset_path + 'raw/')
-    test_dataset.save_to_disk(dataset_name + 'test/')
-    noise_dataset.save_to_disk(dataset_name + 'noise/')
+    test_dataset.save_to_disk(dataset_path + 'test/')
+    noise_dataset.save_to_disk(dataset_path + 'noise/')
 
 if __name__ == '__main__':
   main()

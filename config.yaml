@@ -1,0 +1,9 @@
+dataset:
+  name: HSN
+  base_folder: datasets/
+  raw_folder: raw/
+  test_folder: test/
+  noise_folder: noise/
+  separated_folder: separated/
+
+

@@ -22,7 +22,6 @@ import os
 import tensorflow.compat.v1 as tf
 import numpy as np
 from librosa import resample
-from utils import get_most_confident_detection
 
 def load_separation_model(model_dir,
                           input_tensor='input_audio/receiver_audio:0',
@@ -195,4 +194,24 @@ def complete_separation_numpy(input,
         output_numpy = sess.run(output_wav)
 
     return output_numpy, expected_sampling_rate
+
+def separate_example(example, separation_session_data=None):
+
+    # get audio, filename and ebird-code
+    audio = example["audio"] # acces audio_array by audio['array'] and sampling_rate by audio['sampling_rate']
+
+    # do source separation
+    session, input_node, output_node = separation_session_data
+    sources, source_sr = separate_audio(session,
+                   input_node,
+                   output_node,
+                   audio['array'],
+                   input_sampling_rate=audio['sampling_rate']
+                   )
+    
+    for i, src in enumerate(sources):
+        example[f"source_{i}"] = src
+    example['sources_sampling_rate'] = source_sr
+
+    return example
 
