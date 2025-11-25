@@ -1,13 +1,7 @@
-
-
-from librosa import resample
-import tempfile
 import numpy as np
-import subprocess
 import librosa
 import soundfile as sf
 from scipy.ndimage import uniform_filter1d
-import re
 import os
 
 def detect_event_bounds(audio_array,

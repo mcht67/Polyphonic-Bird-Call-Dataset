@@ -7,16 +7,16 @@ from integrations.bird_mixit.runner import load_separation_model, separate_examp
 from modules.dataset import process_in_batches
 
 def main():
+
+    print("Start separating audio...")
+
     # Load the parameters from the config file
     cfg = OmegaConf.load("config.yaml")
-    dataset_name = cfg.dataset.name
-    base_folder = cfg.dataset.base_folder
-    raw_folder = cfg.dataset.raw_folder
-    separated_folder = cfg.dataset.separated_folder
-
+    raw_data_path = cfg.paths.raw_data
+    source_separated_data_path = cfg.paths.source_separated_data
+    
     # Load raw dataset
-    dataset_path = base_folder + dataset_name + '/'
-    raw_dataset = load_from_disk(dataset_path + raw_folder)
+    raw_dataset = load_from_disk(raw_data_path)
     raw_dataset = raw_dataset.cast_column("audio", Audio()) # original sampling rate of 32kHz is preserved
 
     # Load source separation model
@@ -35,12 +35,13 @@ def main():
         separated_dataset = process_in_batches(
                         raw_dataset,
                         process_fn=separate_fn,
-                        cache_dir=temp_cache_dir,
+                        cache_dir=temp_cache_dir
                     )
 
     # Save separated dataset
-    separated_dataset.save_to_disk(base_folder + separated_folder)
+    separated_dataset.save_to_disk(source_separated_data_path)
 
+    print("Finished separating audio!")
 
 if __name__ == '__main__':
   main()

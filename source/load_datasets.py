@@ -29,27 +29,35 @@ def separate_to_noise_and_test_split(soundscape_dataset):
     return noise_dataset, soundscape_dataset_filtered
 
 def main():
+
+    print("Start loading datasets...")
     
     # Load the parameters from the config file
     cfg = OmegaConf.load("config.yaml")
-    dataset_name = cfg.dataset.name
+    dataset_subset = cfg.dataset.subset
+    raw_data_path = cfg.paths.raw_data
+    test_data_path = cfg.paths.test_data
+    noise_data_path = cfg.paths.noise_data
 
     # Load Xeno Canto data
-    xc_subset_name = dataset_name + '_xc'
+    xc_subset_name = dataset_subset + '_xc'
     raw_dataset = load_dataset('DBD-research-group/BirdSet', xc_subset_name, split='train', trust_remote_code=True)
+    # TODO: Remove, only here for test runs
+    raw_dataset = raw_dataset.select(range(200, 300))
 
     # Load soundscape data
-    soundscape_subset_name = dataset_name +'_scape'
+    soundscape_subset_name = dataset_subset +'_scape'
     soundscape_5s_dataset = load_dataset('DBD-research-group/BirdSet', soundscape_subset_name, split='test_5s', trust_remote_code=True)
 
     # Get augmentation and test split
     noise_dataset, test_dataset = separate_to_noise_and_test_split(soundscape_5s_dataset)
 
     # Store datasets
-    dataset_path = 'datasets/' + dataset_name + '/'
-    raw_dataset.save_to_disk(dataset_path + 'raw/')
-    test_dataset.save_to_disk(dataset_path + 'test/')
-    noise_dataset.save_to_disk(dataset_path + 'noise/')
+    raw_dataset.save_to_disk(raw_data_path)
+    test_dataset.save_to_disk(test_data_path)
+    noise_dataset.save_to_disk(noise_data_path)
+
+    print("Finished loading datasets!")
 
 if __name__ == '__main__':
   main()

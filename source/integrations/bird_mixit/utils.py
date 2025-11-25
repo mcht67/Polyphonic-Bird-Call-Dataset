@@ -1,3 +1,7 @@
+from source.integrations.birdnet.utils import get_most_confident_detection, check_dominant_species
+from source.integrations.birdset.utils import validate_species_tag_multi
+import numpy as np
+
 def get_best_source_idx(list_of_detections_per_source, birdset_example=None, birdset_subset=None, decision_rule=None):
     """
     Takes list of detections per source and an optional decision rule. Chooses best source based in decision rule chosen.

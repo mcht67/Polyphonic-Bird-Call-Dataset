@@ -5,6 +5,8 @@ paths:
   source_separated_data: data/${dataset.subset}/source_separated
   birdnetlib_analyzed_data: data/${dataset.subset}/birdnetlib_analyzed
   segmented_data: data/${dataset.subset}/segmented
+  balanced_data: data/${dataset.subset}/balanced
+  polyphonic_data: data/${dataset.subset}/polyphonic
 
 dataset:
   subset: HSN

@@ -1,3 +1,8 @@
+import json
+import pandas as pd
+
+from modules.utils import normalize_name
+
 def validate_species_tag(birdset_code, birdset_subset, birdnetlib_detection=None, scientific_name=None, common_name=None):
     """
     Takes the birdset label which is an id, the birdset subset used and a birdnetlib detection or scientific name/common name. 
