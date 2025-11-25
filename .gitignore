@@ -1,6 +1,7 @@
 .DS_Store
-source/__pycache__/
 datasets/
+data/
 examples/
 resources/bird_mixit_model_checkpoints/
 source/exp/
+__pycache__

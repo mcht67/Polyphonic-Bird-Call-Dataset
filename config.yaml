@@ -1,9 +1,10 @@
+paths: 
+  raw_data: data/${dataset.subset}/raw
+  test_data: data/${dataset.subset}/test
+  noise_data: data/${dataset.subset}/noise
+  source_separated_data: data/${dataset.subset}/source_separated
+  birdnetlib_analyzed_data: data/${dataset.subset}/birdnetlib_analyzed
+  segmented_data: data/${dataset.subset}/segmented
+
 dataset:
-  name: HSN
-  base_folder: datasets/
-  raw_folder: raw/
-  test_folder: test/
-  noise_folder: noise/
-  separated_folder: separated/
-
-
+  subset: HSN
