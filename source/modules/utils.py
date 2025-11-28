@@ -42,6 +42,41 @@ def normalize_name(name):
 
 def get_audio_file_name(output_dir, filename, details):
     return f"{output_dir}{Path(filename).stem}_{details}.wav"
+class IndexMap:
+    """Random non-repeating index generator with optional auto-reset."""
+
+    def __init__(self, indices, random_seed=None, auto_reset=False):
+        """
+        :param indices: List of indices
+        :param random_seed: Seed for reproducible sequence.
+        :param auto_reset: If True, reshuffles when exhausted.
+        """
+        self.auto_reset = auto_reset
+        self.rng = random.Random(random_seed)
+        self.indices = indices
+        self.num_indices = len(self.indices)
+        self.pos = 0
+        self.reset()
+
+    def reset(self):
+        """Reshuffle indices and restart sequence."""
+        self.rng.shuffle(self.indices)
+        self.pos = 0
+
+    def pop_random(self):
+        """
+        Return next random index.
+        Auto-resets if enabled when exhausted.
+        """
+        if self.pos >= self.num_indices:
+            if self.auto_reset:
+                self.reset()
+            else:
+                raise IndexError("No unused indices left")
+
+        value = self.indices[self.pos]
+        self.pos += 1
+        return value
 
 @with_random_state
 def create_index_map(num_indices, random_state=None):

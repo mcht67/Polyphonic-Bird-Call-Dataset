@@ -19,13 +19,15 @@ def main():
     balanced_dataset = load_from_disk(balanced_data_path)
     sampling_rate = balanced_dataset[0]['audio']['sampling_rate']
     # TODO: Check if necessary
-    balanced_dataset.cast_column("audio", Audio(sampling_rate=sampling_rate))
+    #balanced_dataset.cast_column("audio", Audio(sampling_rate=sampling_rate))
+    print(balanced_dataset)
 
 
     # Load no bird/noise dataset
     noise_dataset = load_from_disk(noise_data_path)
     # TODO: Check if necessary
-    noise_dataset.cast_column("audio", Audio(sampling_rate=sampling_rate))
+    # noise_dataset.cast_column("audio", Audio(sampling_rate=sampling_rate))
+    print(noise_dataset)
     
     # Setup features
     raw_features = balanced_dataset.features
@@ -88,3 +90,6 @@ def main():
     # Remove tmp files
     for d in temp_dirs:
         shutil.rmtree(d)
+
+if __name__=="__main__":
+    main()
