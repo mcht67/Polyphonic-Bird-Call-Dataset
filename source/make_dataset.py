@@ -6,20 +6,19 @@ def main():
   #load_datasets.main()
 
   # Separate audio
-  # separate_audio.main()
+  #separate_audio.main()
 
   # Analyze audio with birdnetlib
-  analyze_audio.main()
+  #analyze_audio.main()
 
   # Segment audio
-  segment_audio.main()
+  #segment_audio.main()
 
   # Balance dataset
   balance_dataset.main()
 
   # Mix audio
   mix_audio.main()
-   
 
 if __name__ == '__main__':
   main()

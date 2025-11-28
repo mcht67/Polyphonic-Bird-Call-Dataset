@@ -47,7 +47,7 @@ class IndexMap:
 
     def __init__(self, indices, random_seed=None, auto_reset=False):
         """
-        :param indices: List of indices
+        :param indices: List of indices.
         :param random_seed: Seed for reproducible sequence.
         :param auto_reset: If True, reshuffles when exhausted.
         """

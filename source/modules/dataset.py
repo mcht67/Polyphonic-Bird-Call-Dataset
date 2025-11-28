@@ -1,5 +1,5 @@
 import random
-from datasets import concatenate_datasets, Features, Sequence
+from datasets import concatenate_datasets, Features, Sequence, Audio
 from collections import defaultdict
 import os
 from pathlib import Path
@@ -7,7 +7,7 @@ from librosa import resample
 import numpy as np
 
 from modules.dsp import calculate_rms, dBFS_to_gain, normalize_to_dBFS, num_samples_to_duration_s, duration_s_to_num_samples
-from modules.utils import create_index_map_from_range, pop_random_index, reset_index_map
+from modules.utils import create_index_map_from_range, pop_random_index, reset_index_map, IndexMap
 
 def flatten_raw_examples(raw_examples):
     flattened = defaultdict(list)
@@ -99,6 +99,9 @@ def flatten_features(prefix: str, features: Features) -> Features:
 
 def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, segment_length_in_s, sampling_rate, random_seed=None):
 
+    # Decode noise audio data
+    noise_data = noise_data.cast_column("audio", Audio(sampling_rate=sampling_rate))
+
     # Get segment lenght in samples
     segment_length_in_samples = duration_s_to_num_samples(segment_length_in_s, sampling_rate)
 
@@ -113,17 +116,26 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, segment_le
 
 
     # Create polyphony degree map and get initial value
-    polyphony_map = create_index_map_from_range(range(1, max_polyphony_degree + 1), random_state=random_seed)
-    polyphony_degree = pop_random_index(polyphony_map)
-
+    # polyphony_map = create_index_map_from_range(range(1, max_polyphony_degree + 1), random_state=random_seed)
+    # polyphony_degree = pop_random_index(polyphony_map)
+    polyphony_degrees = list(range(1, max_polyphony_degree + 1)) 
+    polyphony_map = IndexMap(polyphony_degrees, random_seed=random_seed, auto_reset=True)
+    polyphony_degree = polyphony_map.pop_random()
+    
     # Create signal level map
-    #signal_levels_map = create_index_map_from_range(range(-6,0), random_state=random_seed)
+    #signal_levels_map = create_index_map_from_range(range(-12,0), random_state=random_seed)
+    signal_levels = list(range(-12, 0))
+    signal_levels_map = IndexMap(signal_levels, random_seed=random_seed, auto_reset=True)
 
     # Create SNR map
-    snr_map = create_index_map_from_range(range(-12, 12), random_state=random_seed) 
+    #snr_map = create_index_map_from_range(range(-12, 12), random_state=random_seed)
+    snr_values = list(range(-12,12))
+    snr_map = IndexMap(snr_values, random_seed=random_seed, auto_reset=True)
 
     # Create final mix level map
-    mix_levels_map = create_index_map_from_range(range(-12, -6), random_state=random_seed) 
+    #mix_levels_map = create_index_map_from_range(range(-12, -6), random_state=random_seed) 
+    mix_levels = list(range(-12,-6))
+    mix_levels_map = IndexMap(mix_levels, random_seed=random_seed, auto_reset=True)
 
     # init containers
     raw_signals = []
@@ -178,11 +190,11 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, segment_le
 
             # Get relative volume in dBFS
             # Use first signal as reference with 0 dBFS
-            # else apply random gain between -12 and 0 dBFS
+            # else get level from signal levels #else apply random gain between -12 and 0 dBFS
             if not raw_signals:
                 signal_dBFS = 0
             else:
-                signal_dBFS = random.randrange(-12,0)
+                signal_dBFS = signal_levels_map.pop_random() #signal_dBFS = random.randrange(-12,0)
             example["relative_dBFS"] = signal_dBFS
 
             # Calculate and apply linear gain factors
@@ -205,13 +217,13 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, segment_le
             # Mix colleted signals
             if len(birdset_code_multilabel) == polyphony_degree:
 
-                # Check if all mix levels have been used
-                if (all(mix_levels_map.values())):
-                    reset_index_map(mix_levels_map)
+                # # Check if all mix levels have been used
+                # if (all(mix_levels_map.values())):
+                #     reset_index_map(mix_levels_map)
 
-                # Check if all snr levels have been used
-                if (all(snr_map.values())):
-                    reset_index_map(snr_map)
+                # # Check if all snr levels have been used
+                # if (all(snr_map.values())):
+                #     reset_index_map(snr_map)
 
                 # Check if still noise files left
                 if not mix_id < len(filtered_noise_data):
@@ -230,7 +242,7 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, segment_le
                 noise_signal, noise_norm_gain = normalize_to_dBFS(noise_signal, 0, noise_orig_rms)
 
                 # Get relative SNR in dBFS
-                noise_dBFS = pop_random_index(snr_map)
+                noise_dBFS = snr_map.pop_random()
 
                 # Calculate and apply linear gain factor
                 noise_gain = dBFS_to_gain(noise_dBFS)
@@ -253,7 +265,7 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, segment_le
 
                 # TODO: Get mix level in dBFS
                 mix_orig_rms = calculate_rms(mixed_signal, sampling_rate)
-                mix_dBFS = pop_random_index(mix_levels_map)
+                mix_dBFS = mix_levels_map.pop_random()
 
                 # TODO: Normalize to desired dBFS prevent clipping
                 mixed_signal, mix_gain = normalize_to_dBFS(mixed_signal, mix_dBFS, mix_orig_rms)
@@ -288,11 +300,11 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, segment_le
                 birdset_code_multilabel = []
                 original_filenames = set([])
 
-                # Check if all polyphony degrees have been used
-                if (all(polyphony_map.values())):
-                    reset_index_map(polyphony_map)
+                # # Check if all polyphony degrees have been used
+                # if (all(polyphony_map.values())):
+                #     reset_index_map(polyphony_map)
                 
-                polyphony_degree = pop_random_index(polyphony_map)
+                polyphony_degree = polyphony_map.pop_random()
 
         previous_len = len(raw_data)
         raw_data = skipped_examples

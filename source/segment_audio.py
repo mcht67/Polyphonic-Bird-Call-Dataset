@@ -1,10 +1,10 @@
 import numpy as np
-import tqdm
+from tqdm import tqdm
 from datasets import Dataset, load_from_disk
 from pathlib import Path
 from omegaconf import OmegaConf
 
-from modules.dsp import detect_event_bounds, stft_mask_bandpass, segment_audio, pad_audio_end, num_samples_to_duration_s, remove_segments_without_events, extract_relevant_bounds
+from modules.dsp import detect_event_bounds, stft_mask_bandpass, segment_audio, pad_audio_end, num_samples_to_duration_s, remove_segments_without_events, extract_relevant_bounds, plot_save_mel_spectrogram
 
 from integrations.birdnetlib.utils import check_dominant_species, only_target_bird_detected
 from integrations.birdset.utils import validate_species_tag_multi, birdset_code_to_ebird_taxonomy
@@ -14,15 +14,8 @@ def get_validated_sources(example, birdset_subset, confidence_threshold=0.9, min
     # Init validated sources
     validated_sources = []
 
-    # Get list of detections per source
-    i = 0
-    list_of_detections_per_source= []
-
-    while f"source_{i}_detections" in example:
-        list_of_detections_per_source.append(example[f"source_{i}_detections"])
-        i += 1
-
-    for source_idx, detections in enumerate(list_of_detections_per_source):
+    for source_idx, source in enumerate(example['sources']):
+        detections = source['detections']
         if detections:
             # Get detections with confidence above threshold → removes uncertain detections
             confident_detections = [detection for detection in detections if (detection['confidence'] > confidence_threshold)]
@@ -62,12 +55,7 @@ def extract_segments_from_example(example, birdset_subset):
     filename = Path(example['filepath']).name
 
     # get all sources
-    i = 0
-    sources = []
-    while f"source_{i}" in example:
-        sources.append(np.array(example[f"source_{i}"]))
-        i += 1
-    sources_sampling_rate = example['sources_sampling_rate']
+    sources = example['sources']
 
     # get all good sources
     validated_sources_data = get_validated_sources(example, birdset_subset)
@@ -80,10 +68,12 @@ def extract_segments_from_example(example, birdset_subset):
     for validated_source in validated_sources_data:
 
         source_idx = validated_source['source_index']
-        source_array = sources[source_idx]
+        source = sources[source_idx]
+        source_array = np.array(source['audio']['array'])
+        source_sampling_rate = source['audio']['sampling_rate']
 
         # Get on-/offsets
-        call_bounds = detect_event_bounds(source_array, sr=sources_sampling_rate,
+        call_bounds = detect_event_bounds(source_array, sr=source_sampling_rate,
                         smooth_ms=25,
                         threshold_ratio=0.1,
                         min_gap_s=0.02,
@@ -94,19 +84,27 @@ def extract_segments_from_example(example, birdset_subset):
             continue
 
         # Get bounding boxes and mask audio
-        audio_filtered, time_frequency_bounds = stft_mask_bandpass(source_array, sources_sampling_rate, n_fft=1024, low_pct=2, high_pct=98, events=call_bounds)
+        audio_filtered, time_frequency_bounds = stft_mask_bandpass(source_array, source_sampling_rate, n_fft=1024, low_pct=2, high_pct=98, events=call_bounds)
+
+        # # Compare time frequency bounds with detected events in BirdSet
+        detect_events = example['detected_events']
+        print(f'Time-frequency bounds: {time_frequency_bounds}')
+        print(f"Detected events: {example['detected_events']}")
+        print(f"Event cluser: {example['event_cluster']}")
+        print(f"Peaks: {example['peaks']}")
+        plot_save_mel_spectrogram(np.array(source_array), source_sampling_rate)
 
         # Segment audio
         segment_length= 5
-        audio_segments = segment_audio(audio_filtered, sources_sampling_rate, segment_length, keep_incomplete=True) 
+        audio_segments = segment_audio(audio_filtered, source_sampling_rate, segment_length, keep_incomplete=True) 
 
         # Handle last segment
         last_segment = audio_segments[-1]
-        segment_duration = num_samples_to_duration_s(len(last_segment['audio_array']), sources_sampling_rate)
+        segment_duration = num_samples_to_duration_s(len(last_segment['audio_array']), source_sampling_rate)
 
         # If the segment is at least 1s, pad the end to reach desired length
         if segment_duration >= 1.0:
-            padded_array, pad_end_s = pad_audio_end(last_segment['audio_array'], sources_sampling_rate, segment_length)
+            padded_array, pad_end_s = pad_audio_end(last_segment['audio_array'], source_sampling_rate, segment_length)
             last_segment['audio_array'] = padded_array
 
         # Otherwise, remove it entirely
@@ -117,7 +115,7 @@ def extract_segments_from_example(example, birdset_subset):
         segments_with_events = remove_segments_without_events(audio_segments, call_bounds)
 
         # Remove segments with detections of other birds
-        detections = example[f'source_{i}_detections'] #list_of_detections_per_source[source_idx]
+        detections = source['detections']
         birdset_code = validated_source['birdset_code']
         ebird_code, common_name, scientific_name = birdset_code_to_ebird_taxonomy(birdset_code, birdset_subset)
 
@@ -126,7 +124,7 @@ def extract_segments_from_example(example, birdset_subset):
             end_time = segment['end_time']
             if only_target_bird_detected(detections, scientific_name, start_time, end_time, confidence_threshold=0.0):
                 segment_to_return = {
-                    "audio": {'array': np.array(segment['audio_array']) , 'sampling_rate': sources_sampling_rate},
+                    "audio": {'array': np.array(segment['audio_array']) , 'sampling_rate': source_sampling_rate},
                     "time_freq_bounds": extract_relevant_bounds(start_time, end_time, time_frequency_bounds),
                     'birdset_code': birdset_code,
                     'ebird_code': ebird_code,
@@ -146,11 +144,11 @@ def main():
 
     # Load the parameters from the config file
     cfg = OmegaConf.load("config.yaml")
-    source_separated_data_path = cfg.paths.source_separated_data
+    birdnetlib_analyzed_data_path = cfg.paths.birdnetlib_analyzed_data
     segmented_data_path = cfg.paths.segmented_data
 
     # Load source separated dataset
-    source_separated_dataset = load_from_disk(source_separated_data_path)
+    birdnetlib_analyzed_dataset = load_from_disk(birdnetlib_analyzed_data_path)
 
     # Define features of segments dataset
     segments_dataset_rows = {
@@ -165,7 +163,7 @@ def main():
         }
 
     # Extract segments from examples
-    for example in tqdm(source_separated_dataset):
+    for example in tqdm(birdnetlib_analyzed_dataset):
         segments = extract_segments_from_example(example, birdset_subset="HSN")
         if segments:
             for row in segments:  # each row is a dict with a single audio dict
@@ -186,5 +184,5 @@ def main():
 
     print("Finished segementing audio!")
     
-    if __name__ == '__main__':
-        main()
+if __name__ == '__main__':
+    main()

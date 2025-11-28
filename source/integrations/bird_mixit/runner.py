@@ -209,9 +209,12 @@ def separate_example(example, separation_session_data=None):
                    input_sampling_rate=audio['sampling_rate']
                    )
     
-    for i, src in enumerate(sources):
-        example[f"source_{i}"] = src
-    example['sources_sampling_rate'] = source_sr
+    example['sources'] = [{"audio": {"array": np.array(source), "sampling_rate": source_sr}, "detections": []} for source in sources]
+
+    # for i, src in enumerate(sources):
+    #     example[f"source_{i}"] = {'audio': {'array': np.array(src) , 'sampling_rate': source_sr}}
+    #     example[f"source_{i}"] = src
+    # example['sources_sampling_rate'] = source_sr
 
     return example
 

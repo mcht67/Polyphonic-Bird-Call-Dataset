@@ -1,10 +1,11 @@
-import tempfile
-from datasets import load_from_disk, Audio
+from datasets import load_from_disk, Audio, Features, Sequence, Value
 from omegaconf import OmegaConf
 from functools import partial
+import shutil
 
 from integrations.bird_mixit.runner import load_separation_model, separate_example
 from modules.dataset import process_in_batches
+
 
 def main():
 
@@ -24,24 +25,58 @@ def main():
                             checkpoint="resources/bird_mixit_model_checkpoints/output_sources4/model.ckpt-3223090")
     separation_session_data = (session, input_node, output_node)
 
-    # Store with on-/offset, frequency bounds in original file
-    with tempfile.TemporaryDirectory() as temp_cache_dir:
+    # Define the schema for the new column holding the sources data
+    source_features = Features({
+        "sources": Sequence({
+            "audio": {'array': Sequence(Value("float32")), 'sampling_rate': Value("int32")}, #Audio(),
+            "detections": Sequence({
+                "common_name": Value("string"),
+                "scientific_name": Value("string"),
+                "label": Value("string"),
+                "confidence": Value("float32"),
+                "start_time": Value("float32"),
+                "end_time": Value("float32"),
+            })
+        })
+    })
 
-        separate_fn = partial(
-            separate_example,
-            separation_session_data=separation_session_data
-        )
+    # Update dataset schema
+    # raw_dataset = raw_dataset.cast(
+    #     raw_dataset.features | source_features
+    # )
 
-        separated_dataset = process_in_batches(
-                        raw_dataset,
-                        process_fn=separate_fn,
-                        cache_dir=temp_cache_dir
-                    )
+    empty_sources = [None] * len(raw_dataset)
+
+    raw_dataset = raw_dataset.add_column("sources", empty_sources, feature=source_features["sources"])
+    print(raw_dataset.features)
+
+    # Define cache dir
+    temp_cache_dir = source_separated_data_path + '_cache'
+
+    separate_fn = partial(
+        separate_example,
+        separation_session_data=separation_session_data
+    )
+
+    separated_dataset = process_in_batches(
+                    raw_dataset,
+                    process_fn=separate_fn,
+                    #features=source_features,
+                    cache_dir=temp_cache_dir
+                )
 
     # Save separated dataset
+    print(f"Attempt saving dataset to {source_separated_data_path}.")
     separated_dataset.save_to_disk(source_separated_data_path)
+    print(f"Succesfully saved dataset to {source_separated_data_path}.")
 
     print("Finished separating audio!")
+
+    try:
+        shutil.rmtree(temp_cache_dir)
+    except Exception as e:
+        print(f"Warning: cache cleanup failed: {e}")
+
 
 if __name__ == '__main__':
   main()

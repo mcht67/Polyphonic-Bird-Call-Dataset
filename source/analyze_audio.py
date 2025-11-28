@@ -1,6 +1,6 @@
 from datasets import load_from_disk, Audio
 from omegaconf import OmegaConf
-import tempfile
+import shutil
 
 from integrations.birdnetlib.utils import analyze_example
 from modules.dataset import process_in_batches
@@ -16,21 +16,26 @@ def main():
 
     # Load dataset with separateed sources
     separated_dataset = load_from_disk(source_separated_data_path)
-    separated_dataset_dataset = separated_dataset.cast_column("audio", Audio())
 
     # Store detections
-    with tempfile.TemporaryDirectory() as temp_cache_dir:
+     # Define cache dir
+    temp_cache_dir = birdnetlib_analyzed_data_path + '_cache'
 
-        analyzed_dataset = process_in_batches(
-                        separated_dataset,
-                        process_fn=analyze_example,
-                        cache_dir=temp_cache_dir
-                    )
+    analyzed_dataset = process_in_batches(
+                    separated_dataset,
+                    process_fn=analyze_example,
+                    cache_dir=temp_cache_dir
+                )
         
     # Save analyzed dataset
     analyzed_dataset.save_to_disk(birdnetlib_analyzed_data_path)
 
-    print("Finished anlyzing audio birdnetlib!")
+    print("Finished analyzing audio birdnetlib!")
+
+    try:
+        shutil.rmtree(temp_cache_dir)
+    except Exception as e:
+        print(f"Warning: cache cleanup failed: {e}")
 
 if __name__ == '__main__':
   main()

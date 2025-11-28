@@ -45,7 +45,7 @@ def analyze_with_birdnetlib(audio_array, original_sampling_rate, birdnet_samplin
             # "conda", "run", "-n", "birdnetlib",
             # "python", 
             "/Users/maltecohrt/miniconda3/envs/birdnetlib/bin/python",
-            "source/birdnetlib/run_birdnetlib_inference.py",
+            "source/integrations/birdnetlib/run_birdnetlib_inference.py",
             "--array_file", tmp_file.name,
             "--sr", str(birdnet_sampling_rate)
         ]
@@ -87,22 +87,36 @@ def analyze_with_birdnetlib(audio_array, original_sampling_rate, birdnet_samplin
 def analyze_example(example):
 
     # get all sources
-    i = 0
-    sources = []
-    while f"source_{i}" in example:
-        sources.append(np.array(example[f"source_{i}"]))
-        i += 1
-    sources_sampling_rate = example['sources_sampling_rate']
+    sources = example['sources']
     
     # analyze all sources with birdnetlib
-    list_of_detections_per_source = []
-    for source_array in sources:
-        detections = analyze_with_birdnetlib(source_array, sources_sampling_rate)
-        list_of_detections_per_source.append(detections)
+    for idx, source in enumerate(sources):
+        source_array = np.array(source['audio']['array'])
+        source_sampling_rate = source['audio']['sampling_rate']
+        detections = analyze_with_birdnetlib(source_array, source_sampling_rate)
+        source['detections'] = detections
 
-    # store all detections in dataset
-    for i, detections in enumerate(list_of_detections_per_source):
-        example[f"source_{i}_detections"] = detections
+    return {"sources": sources}
+
+# def analyze_example(example):
+
+#     # get all sources
+#     i = 0
+#     sources = []
+#     while f"source_{i}" in example:
+#         sources.append(np.array(example[f"source_{i}"]))
+#         i += 1
+#     sources_sampling_rate = example['sources_sampling_rate']
+    
+#     # analyze all sources with birdnetlib
+#     list_of_detections_per_source = []
+#     for source_array in sources:
+#         detections = analyze_with_birdnetlib(source_array, sources_sampling_rate)
+#         list_of_detections_per_source.append(detections)
+
+#     # store all detections in dataset
+#     for i, detections in enumerate(list_of_detections_per_source):
+#         example[f"source_{i}_detections"] = detections
     
 def get_most_confident_detection(detections):
     """
