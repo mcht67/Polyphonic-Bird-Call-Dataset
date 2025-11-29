@@ -15,7 +15,7 @@ def main():
   #segment_audio.main()
 
   # Balance dataset
-  balance_dataset.main()
+  #balance_dataset.main()
 
   # Mix audio
   mix_audio.main()

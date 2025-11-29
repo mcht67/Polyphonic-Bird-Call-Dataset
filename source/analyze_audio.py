@@ -2,7 +2,7 @@ from datasets import load_from_disk, Audio
 from omegaconf import OmegaConf
 import shutil
 
-from integrations.birdnetlib.utils import analyze_example
+from integrations.birdnetlib.analyze import analyze_example
 from modules.dataset import process_in_batches
 
 def main():

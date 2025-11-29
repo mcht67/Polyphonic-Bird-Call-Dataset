@@ -6,7 +6,7 @@ from omegaconf import OmegaConf
 
 from modules.dsp import detect_event_bounds, stft_mask_bandpass, segment_audio, pad_audio_end, num_samples_to_duration_s, remove_segments_without_events, extract_relevant_bounds, plot_save_mel_spectrogram
 
-from integrations.birdnetlib.utils import check_dominant_species, only_target_bird_detected
+from integrations.birdnetlib.analyze import check_dominant_species, only_target_bird_detected
 from integrations.birdset.utils import validate_species_tag_multi, birdset_code_to_ebird_taxonomy
 
 def get_validated_sources(example, birdset_subset, confidence_threshold=0.9, min_detection_percentage=0.9):
@@ -50,7 +50,7 @@ def get_validated_sources(example, birdset_subset, confidence_threshold=0.9, min
 
     return validated_sources
 
-def extract_segments_from_example(example, birdset_subset):
+def extract_segments_from_example(example, segment_length_in_s, birdset_subset):
 
     filename = Path(example['filepath']).name
 
@@ -86,17 +86,8 @@ def extract_segments_from_example(example, birdset_subset):
         # Get bounding boxes and mask audio
         audio_filtered, time_frequency_bounds = stft_mask_bandpass(source_array, source_sampling_rate, n_fft=1024, low_pct=2, high_pct=98, events=call_bounds)
 
-        # # Compare time frequency bounds with detected events in BirdSet
-        detect_events = example['detected_events']
-        print(f'Time-frequency bounds: {time_frequency_bounds}')
-        print(f"Detected events: {example['detected_events']}")
-        print(f"Event cluser: {example['event_cluster']}")
-        print(f"Peaks: {example['peaks']}")
-        plot_save_mel_spectrogram(np.array(source_array), source_sampling_rate)
-
         # Segment audio
-        segment_length= 5
-        audio_segments = segment_audio(audio_filtered, source_sampling_rate, segment_length, keep_incomplete=True) 
+        audio_segments = segment_audio(audio_filtered, source_sampling_rate, segment_length_in_s, keep_incomplete=True) 
 
         # Handle last segment
         last_segment = audio_segments[-1]
@@ -104,7 +95,7 @@ def extract_segments_from_example(example, birdset_subset):
 
         # If the segment is at least 1s, pad the end to reach desired length
         if segment_duration >= 1.0:
-            padded_array, pad_end_s = pad_audio_end(last_segment['audio_array'], source_sampling_rate, segment_length)
+            padded_array, pad_end_s = pad_audio_end(last_segment['audio_array'], source_sampling_rate, segment_length_in_s)
             last_segment['audio_array'] = padded_array
 
         # Otherwise, remove it entirely
@@ -147,6 +138,8 @@ def main():
     birdnetlib_analyzed_data_path = cfg.paths.birdnetlib_analyzed_data
     segmented_data_path = cfg.paths.segmented_data
 
+    segment_length_in_s = cfg.segmentation.segment_length_in_s
+
     # Load source separated dataset
     birdnetlib_analyzed_dataset = load_from_disk(birdnetlib_analyzed_data_path)
 
@@ -164,7 +157,7 @@ def main():
 
     # Extract segments from examples
     for example in tqdm(birdnetlib_analyzed_dataset):
-        segments = extract_segments_from_example(example, birdset_subset="HSN")
+        segments = extract_segments_from_example(example, segment_length_in_s, birdset_subset="HSN")
         if segments:
             for row in segments:  # each row is a dict with a single audio dict
                 segments_dataset_rows["audio"].append(row["audio"])

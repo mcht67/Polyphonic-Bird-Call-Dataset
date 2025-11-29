@@ -3,7 +3,7 @@ from omegaconf import OmegaConf
 from functools import partial
 import shutil
 
-from integrations.bird_mixit.runner import load_separation_model, separate_example
+from integrations.bird_mixit.source_separation import load_separation_model, separate_example
 from modules.dataset import process_in_batches
 
 
@@ -41,14 +41,8 @@ def main():
     })
 
     # Update dataset schema
-    # raw_dataset = raw_dataset.cast(
-    #     raw_dataset.features | source_features
-    # )
-
     empty_sources = [None] * len(raw_dataset)
-
     raw_dataset = raw_dataset.add_column("sources", empty_sources, feature=source_features["sources"])
-    print(raw_dataset.features)
 
     # Define cache dir
     temp_cache_dir = source_separated_data_path + '_cache'
