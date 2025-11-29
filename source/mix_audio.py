@@ -3,7 +3,7 @@ import tempfile
 from omegaconf import OmegaConf
 from datasets import load_from_disk, Sequence, Value, Features, Audio, Dataset
 
-from modules.dataset import generate_batches, flatten_features, concatenate_datasets
+from modules.dataset import generate_mix_batches, flatten_features, concatenate_datasets
 
 def main():
 
@@ -68,7 +68,7 @@ def main():
 
     balanced_dataset.cast_column("audio", Audio())
 
-    for i, batch in enumerate(generate_batches(balanced_dataset, noise_dataset,
+    for i, batch in enumerate(generate_mix_batches(balanced_dataset, noise_dataset,
                                                max_polyphony_degree, segment_length_in_s, 
                                                sampling_rate, random_seed=random_seed)):
         ds = Dataset.from_list(batch, features=mix_features)
