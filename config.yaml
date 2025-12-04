@@ -17,8 +17,10 @@ dataset:
 source_separation:
   model_dir: resources/bird_mixit_model_checkpoints/output_sources4
   checkpoint: resources/bird_mixit_model_checkpoints/output_sources4/model.ckpt-3223090
-  onnx_model_path: resources/bird_mixit_onnx/model.onnx
-  onnx_optimized_model_path: resources/bird_mixit_onnx/model_optimized.onnx
+  sampling_rate: 22050
+
+analysis:
+  sampling_rate: 48000
 
 segmentation:
   segment_length_in_s: 5

@@ -4,8 +4,8 @@ import tensorflow.compat.v1 as tf
 import numpy as np
 from librosa import resample
 
-from integrations.birdnetlib.analyze import get_most_confident_detection, check_dominant_species
-from integrations.birdset.utils import validate_species_tag_multi
+# from integrations.birdnetlib.analyze import get_most_confident_detection, check_dominant_species
+# from integrations.birdset.utils import validate_species_tag_multi
 
 """
 Functions to run source separation using a pretrained MixIT or similar model.
@@ -65,7 +65,7 @@ def separate_audio(session,
 
     # Resample if needed
     if input_sampling_rate != target_sr:
-        
+        print("Need to resample to", target_sr, "from", input_sampling_rate, ". This is inefficient. Resampling should be done beforehand.")
         audio_array = resample(audio_array,
                                orig_sr=input_sampling_rate,
                                target_sr=target_sr)
@@ -121,14 +121,17 @@ def init_separation_worker(model_dir, checkpoint):
 
 def separate_batch(batch):
     """Process batch using pre-loaded model"""
-    print("Start separating batch")
+    print("Worker", os.getpid(), ": Start separating batch")
     global _separation_session
     
     results = []
+    batch_size = len(batch)
     for i, example in enumerate(batch):
-        print('process example', i)
+        print("Worker", os.getpid(), ": Separating example", i+1, "of ", batch_size)
         processed_example = separate_example(example, _separation_session)
         results.append(processed_example)
+    
+    print("Worker", os.getpid(), ": Finished separating batch")
     
     return results
 

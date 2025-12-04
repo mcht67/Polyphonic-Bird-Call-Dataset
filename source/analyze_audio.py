@@ -14,9 +14,11 @@ def main():
     cfg = OmegaConf.load("config.yaml")
     source_separated_data_path = cfg.paths.source_separated_data
     birdnetlib_analyzed_data_path = cfg.paths.birdnetlib_analyzed_data
+    sampling_rate = cfg.analysis.sampling_rate
 
     # Load dataset with separateed sources
     separated_dataset = load_from_disk(source_separated_data_path)
+    separated_dataset = separated_dataset.cast_column("audio", Audio(sampling_rate=sampling_rate))
 
     # Store detections
     num_workers = psutil.cpu_count(logical=False) or psutil.cpu_count()

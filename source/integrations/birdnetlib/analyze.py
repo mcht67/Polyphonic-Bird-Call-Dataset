@@ -5,7 +5,7 @@ import subprocess
 import re
 import ast
 from collections import Counter
-from pathlib import Path
+import os
 
 from birdnetlib import RecordingBuffer
 from birdnetlib.analyzer import Analyzer
@@ -87,20 +87,26 @@ def analyze_with_birdnetlib(audio_array, original_sampling_rate, birdnet_samplin
 
         return detections
 
-def analyze_example(example):
+def analyze_example(example, target_sr=48000):
 
     # get all sources
     sources = example['sources']
     
     # analyze all sources with birdnetlib
     for source in sources:
+
         source_array = np.array(source['audio']['array'])
         source_sampling_rate = source['audio']['sampling_rate']
 
+        # Resample if needed
+        if source_sampling_rate != target_sr:
+            print("Need to resample to", target_sr, "from", source_sampling_rate, ". This is inefficient. Resampling should be done beforehand.")
+            source_array = resample(source_array,
+                                orig_sr=source_sampling_rate,
+                                target_sr=target_sr)
+
         recording = RecordingBuffer(
             _analyzer,
-            # lat=args.lat,
-            # lon=args.lon,
             buffer=source_array,          
             rate=source_sampling_rate,             
             min_conf=0.2
@@ -121,13 +127,14 @@ def init_analyzation_worker():
     "Initilization of worker succesful."
 
 def analyze_batch(batch):
-    print("Start analyzing batch")
+    print("Worker", os.getpid(), "Start analyzing batch")
     
     analyzed_examples = []
-    for i, example in enumerate(batch):
-        print('analyze example', i)
+    for example in batch:
         analyzed_example = analyze_example(example)
         analyzed_examples.append(analyzed_example)
+
+    print("Worker", os.getpid(), "Finished analyzing batch")
     
     return analyzed_examples
     

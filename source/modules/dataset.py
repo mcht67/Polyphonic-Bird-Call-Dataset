@@ -5,6 +5,7 @@ import os
 import numpy as np
 from datasets import concatenate_datasets, Dataset
 from multiprocessing import Pool, get_context
+from tqdm import tqdm
 
 from modules.dsp import num_samples_to_duration_s
 
@@ -144,14 +145,25 @@ def process_in_batches(dataset, process_fn, cache_dir, prefix="", batch_size=100
 
 def process_batches_in_parallel(dataset, process_batch_fn, batch_size=100, 
                                  num_workers=1, initializer=None, initargs=()):
+    
     batches = [
         dataset.select(range(i, min(i+batch_size, len(dataset))))
         for i in range(0, len(dataset), batch_size)
     ]
+
+    print("Process", len(batches), "batches with a batch size of", batch_size, "on", num_workers, "workers.")
     
+    # with get_context('spawn').Pool(num_workers, initializer=initializer, 
+    #                                  initargs=initargs) as pool:
+    #     batch_results = pool.map(process_batch_fn, batches)
+
     with get_context('spawn').Pool(num_workers, initializer=initializer, 
-                                     initargs=initargs) as pool:
-        batch_results = pool.map(process_batch_fn, batches)
+                                initargs=initargs) as pool:
+        batch_results = list(tqdm(
+            pool.imap(process_batch_fn, batches),
+            total=len(batches),
+            desc="Processing batches"
+    ))
     
     all_examples = [ex for batch in batch_results for ex in batch]
     return Dataset.from_list(all_examples)
