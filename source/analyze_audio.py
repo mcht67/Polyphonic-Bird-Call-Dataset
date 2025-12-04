@@ -18,7 +18,6 @@ def main():
 
     # Load dataset with separateed sources
     separated_dataset = load_from_disk(source_separated_data_path)
-    separated_dataset = separated_dataset.cast_column("audio", Audio(sampling_rate=sampling_rate))
 
     # Store detections
     num_workers = psutil.cpu_count(logical=False) or psutil.cpu_count()

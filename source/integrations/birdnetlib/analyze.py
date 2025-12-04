@@ -7,6 +7,15 @@ import ast
 from collections import Counter
 import os
 
+# os.environ["MPLBACKEND"] = "Agg"  # Fastest backend, no GUI
+
+# # Optional: prevent pyplot import entirely
+# import sys, types
+# sys.modules['matplotlib.pyplot'] = types.ModuleType("pyplot")
+
+# import matplotlib
+# matplotlib.use("Agg")
+
 from birdnetlib import RecordingBuffer
 from birdnetlib.analyzer import Analyzer
 
@@ -100,7 +109,7 @@ def analyze_example(example, target_sr=48000):
 
         # Resample if needed
         if source_sampling_rate != target_sr:
-            print("Need to resample to", target_sr, "from", source_sampling_rate, ". This is inefficient. Resampling should be done beforehand.")
+            #print("Need to resample from", source_sampling_rate, "kHz to", target_sr, "kHz. This is inefficient. Resampling should be done beforehand.")
             source_array = resample(source_array,
                                 orig_sr=source_sampling_rate,
                                 target_sr=target_sr)

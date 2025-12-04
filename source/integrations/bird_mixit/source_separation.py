@@ -65,7 +65,7 @@ def separate_audio(session,
 
     # Resample if needed
     if input_sampling_rate != target_sr:
-        print("Need to resample to", target_sr, "from", input_sampling_rate, ". This is inefficient. Resampling should be done beforehand.")
+        print("Need to resample from", input_sampling_rate, "kHz to", target_sr, "kHz. This is inefficient. Resampling should be done beforehand.")
         audio_array = resample(audio_array,
                                orig_sr=input_sampling_rate,
                                target_sr=target_sr)
