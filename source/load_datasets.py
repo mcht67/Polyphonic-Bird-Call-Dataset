@@ -42,8 +42,6 @@ def main():
     # Load Xeno Canto data
     xc_subset_name = dataset_subset + '_xc'
     raw_dataset = load_dataset('DBD-research-group/BirdSet', xc_subset_name, split='train', trust_remote_code=True)
-    # TODO: Remove, only here for test runs
-    raw_dataset = raw_dataset.select(range(200, 300))
 
     # Load soundscape data
     soundscape_subset_name = dataset_subset +'_scape'

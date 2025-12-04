@@ -6,3 +6,4 @@ resources/bird_mixit_model_checkpoints/
 resources/bird_mixit_savedmodel/
 source/exp/
 __pycache__
+trash/

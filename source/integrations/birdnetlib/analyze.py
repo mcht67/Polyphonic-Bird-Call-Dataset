@@ -7,6 +7,9 @@ import ast
 from collections import Counter
 from pathlib import Path
 
+from birdnetlib import RecordingBuffer
+from birdnetlib.analyzer import Analyzer
+
 from modules.utils import normalize_name
 
 
@@ -84,39 +87,65 @@ def analyze_with_birdnetlib(audio_array, original_sampling_rate, birdnet_samplin
 
         return detections
     
+# def analyze_example(example):
+
+#     # get all sources
+#     sources = example['sources']
+    
+#     # analyze all sources with birdnetlib
+#     for source in sources:
+#         source_array = np.array(source['audio']['array'])
+#         source_sampling_rate = source['audio']['sampling_rate']
+#         detections = analyze_with_birdnetlib(source_array, source_sampling_rate)
+#         source['detections'] = detections
+
+#     return {"sources": sources}
+
+# global variable for every worker
+
 def analyze_example(example):
 
     # get all sources
     sources = example['sources']
     
     # analyze all sources with birdnetlib
-    for idx, source in enumerate(sources):
+    for source in sources:
         source_array = np.array(source['audio']['array'])
         source_sampling_rate = source['audio']['sampling_rate']
-        detections = analyze_with_birdnetlib(source_array, source_sampling_rate)
-        source['detections'] = detections
 
-    return {"sources": sources}
+        recording = RecordingBuffer(
+            _analyzer,
+            # lat=args.lat,
+            # lon=args.lon,
+            buffer=source_array,          
+            rate=source_sampling_rate,             
+            min_conf=0.2
+        )
 
-# def analyze_example(example):
+        recording.analyze()
 
-#     # get all sources
-#     i = 0
-#     sources = []
-#     while f"source_{i}" in example:
-#         sources.append(np.array(example[f"source_{i}"]))
-#         i += 1
-#     sources_sampling_rate = example['sources_sampling_rate']
+        source['detections'] = recording.detections
+
+    return example
+
+_analyzer = None
+
+def init_analyzation_worker():
+    "Start initilization of worker."
+    global _analyzer
+    _analyzer = Analyzer()
+    "Initilization of worker succesful."
+
+def analyze_batch(batch):
+    print("Start analyzing batch")
     
-#     # analyze all sources with birdnetlib
-#     list_of_detections_per_source = []
-#     for source_array in sources:
-#         detections = analyze_with_birdnetlib(source_array, sources_sampling_rate)
-#         list_of_detections_per_source.append(detections)
-
-#     # store all detections in dataset
-#     for i, detections in enumerate(list_of_detections_per_source):
-#         example[f"source_{i}_detections"] = detections
+    analyzed_examples = []
+    for i, example in enumerate(batch):
+        print('analyze example', i)
+        analyzed_example = analyze_example(example)
+        analyzed_examples.append(analyzed_example)
+    
+    return analyzed_examples
     
 def get_most_confident_detection(detections):
     """
@@ -184,5 +213,5 @@ def only_target_bird_detected(detections, target_scientific_name, start_time, en
             if normalize_name(det["scientific_name"]) != normalize_name(target_scientific_name):
                 return False
 
-    # If we reach here, only target bird(s) were detected
+    # If we reach this, only target bird(s) were detected
     return True

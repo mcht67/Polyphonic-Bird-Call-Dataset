@@ -1,13 +1,12 @@
 import random
-from datasets import concatenate_datasets, Features, Sequence, Audio
+from datasets import concatenate_datasets, Features, Sequence
 from collections import defaultdict
 import os
-from pathlib import Path
-from librosa import resample
 import numpy as np
+from datasets import concatenate_datasets, Dataset
+from multiprocessing import Pool, get_context
 
-from modules.dsp import calculate_rms, dBFS_to_gain, normalize_to_dBFS, num_samples_to_duration_s, duration_s_to_num_samples
-from modules.utils import create_index_map_from_range, pop_random_index, reset_index_map, IndexMap
+from modules.dsp import num_samples_to_duration_s
 
 def flatten_raw_examples(raw_examples):
     flattened = defaultdict(list)
@@ -103,220 +102,22 @@ def filter_dataset_by_audio_array_length(dataset, min_duration_in_s):
         if num_samples_to_duration_s(len(example['audio']['array']), example['audio']['sampling_rate']) >= min_duration_in_s
     ]
 
-def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, segment_length_in_s, sampling_rate, random_seed=None):
-
-    # Decode noise audio data
-    noise_data = noise_data.cast_column("audio", Audio(sampling_rate=sampling_rate))
-
-    # Get segment lenght in samples
-    segment_length_in_samples = duration_s_to_num_samples(segment_length_in_s, sampling_rate)
-
-    # Filter noise by length
-    filtered_noise_data = filter_dataset_by_audio_array_length(noise_data, segment_length_in_s)
-    print(f"Filtered noise dataset: kept {len(filtered_noise_data)} of {len(noise_data)} samples")
-
-    # Create polyphony degree map and get initial value
-    polyphony_degrees = list(range(1, max_polyphony_degree + 1)) 
-    polyphony_map = IndexMap(polyphony_degrees, random_seed=random_seed, auto_reset=True)
-    
-    # Create signal level map
-    signal_levels = list(range(-12, 0))
-    signal_levels_map = IndexMap(signal_levels, random_seed=random_seed, auto_reset=True)
-
-    # Create SNR map
-    snr_values = list(range(-12,12))
-    snr_map = IndexMap(snr_values, random_seed=random_seed, auto_reset=True)
-
-    # Create final mix level map
-    mix_levels = list(range(-12,-6))
-    mix_levels_map = IndexMap(mix_levels, random_seed=random_seed, auto_reset=True)
-
-    # init containers
-    raw_signals = []
-    raw_data_list = []
-    birdset_code_multilabel = []
-    original_filenames = set([])
-    
-    polyphony_degree = polyphony_map.pop_random()
-    mix_id = 0
-    raw_data = list(raw_data)
-
-    while raw_data:
-
-        skipped_examples = []
-
-        for example in raw_data:
-
-            # Ommit using two files from the same file
-            original_filename = example['original_file']
-            if original_filename not in original_filenames:
-                original_filenames.add(original_filename)
-            else:
-                skipped_examples.append(example)
-                continue
-
-            # Collect signals up to polyphony degree
-            audio = example["audio"]
-            raw_signal = np.array(audio["array"])  # This is a float32 NumPy array
-            signal_sampling_rate = audio["sampling_rate"]
-
-            # Resample if necessary
-            raw_signal = resample(raw_signal, orig_sr=audio['sampling_rate'], target_sr=sampling_rate)
-
-            # If signal length below chosen segment duration in seconds, skip it
-            if raw_signal.size < segment_length_in_samples:
-                print(raw_signal.size)
-                print(f'Skipping segment due to insufficient length.')
-                continue
-
-            # If stereo, sum to mono
-            if raw_signal.ndim > 1:  
-                raw_signal = np.mean(raw_signal, axis=0)
-
-            # Calculate RMS for event bounds
-            event_bounds = example["time_freq_bounds"]
-            event_rms = calculate_rms(raw_signal, signal_sampling_rate, event_bounds)
-            example["event_rms"] = event_rms
-            
-            # Normalize file to 0 dBFS / RMS = 1
-            normalized_signal, signal_norm_gain = normalize_to_dBFS(raw_signal, 0, event_rms)
-            example["norm_gain"] = signal_norm_gain
-
-            # Get relative volume in dBFS
-            # Use first signal as reference with 0 dBFS
-            # else get level from signal levels map #else apply random gain between -12 and 0 dBFS
-            if not raw_signals:
-                signal_dBFS = 0
-            else:
-                signal_dBFS = signal_levels_map.pop_random() #signal_dBFS = random.randrange(-12,0)
-            example["relative_dBFS"] = signal_dBFS
-
-            # Calculate and apply linear gain factors
-            signal_gain = dBFS_to_gain(signal_dBFS)
-            example["gain"] = signal_gain
-            leveled_signal = signal_gain * normalized_signal
-
-            # TODO: Check if signal is long enough and pad if not
-            if len(leveled_signal) < segment_length_in_samples:
-                padding_length = segment_length_in_samples - len(leveled_signal)
-                leveled_signal = np.pad(leveled_signal, (0, padding_length))
-
-            # Append Signal    
-            raw_signals.append(leveled_signal)
-            raw_data_list.append(example)
-
-            birdset_code = example['birdset_code']
-            birdset_code_multilabel.append(birdset_code)
-
-            # Mix colleted signals
-            if len(birdset_code_multilabel) == polyphony_degree:
-
-                # Check if still noise files left
-                if not mix_id < len(filtered_noise_data):
-                    print("Used all noise files!")
-                    break
-
-                 # Get noise signal
-                noise_array = filtered_noise_data[mix_id]['audio']['array']
-                noise_sampling_rate = filtered_noise_data[mix_id]['audio']['sampling_rate']
-                noise_signal = resample(noise_array, orig_sr=noise_sampling_rate, target_sr=sampling_rate)
-                noise_file = Path(filtered_noise_data[mix_id]['filepath']).name
-
-                # Normalize noise to 0 dBFS / RMS = 1
-                noise_orig_rms = calculate_rms(noise_signal, sampling_rate)
-                noise_signal, noise_norm_gain = normalize_to_dBFS(noise_signal, 0, noise_orig_rms)
-
-                # Get relative SNR in dBFS
-                noise_dBFS = snr_map.pop_random()
-
-                # Calculate and apply linear gain factor
-                noise_gain = dBFS_to_gain(noise_dBFS)
-                noise_signal *= noise_gain
-
-                # Check if noise is long enough
-                if len(noise_signal) < segment_length_in_samples:
-                    print(len(noise_signal))
-                    print(num_samples_to_duration_s(len(noise_signal), sampling_rate))
-                    raise ValueError("Noise signal is too short to be mixed properly.")
-                
-                # Append noise signal
-                raw_signals.append(noise_signal)
-                
-                # Trim to segment length
-                raw_signals = [a[:segment_length_in_samples] for a in raw_signals]
-
-                # Mix (sum all waveforms)
-                mixed_signal = np.sum(raw_signals, axis=0)
-
-                # Get mix level in dBFS
-                mix_orig_rms = calculate_rms(mixed_signal, sampling_rate)
-                mix_dBFS = mix_levels_map.pop_random()
-
-                # Normalize to desired dBFS prevent clipping
-                mixed_signal, mix_gain = normalize_to_dBFS(mixed_signal, mix_dBFS, mix_orig_rms)
-
-                flattened_raw = flatten_raw_examples(raw_data_list)
-
-                mix_example = {
-                    "id": str(mix_id),
-                    "audio": {'array': mixed_signal.copy(), 'sampling_rate': int(sampling_rate)},
-                    # "sampling_rate": int(sampling_rate),
-                    "polyphony_degree": int(polyphony_degree),
-                    "birdset_code_multilabel": birdset_code_multilabel[:],
-                    "noise_file": noise_file,
-                    "noise_orig_rms": noise_orig_rms,
-                    "noise_dBFS": noise_dBFS,
-                    "noise_norm_gain": noise_norm_gain,
-                    "noise_gain": noise_gain,
-                    "mix_orig_rms": mix_orig_rms,
-                    "mix_dBFS": mix_dBFS,
-                    "mix_gain": mix_gain,
-                    **flattened_raw.copy()
-                }
-                yield mix_example
-
-                # Reset mixing stage
-                mix_id += 1
-
-                raw_signals = []
-                raw_data_list = []
-                birdset_code_multilabel = []
-                original_filenames = set([])
-                
-                polyphony_degree = polyphony_map.pop_random()
-
-        previous_len = len(raw_data)
-        raw_data = skipped_examples
-        if len(raw_data) == previous_len:
-            print([e['original_file']for e in raw_data])
-            print(f'polyphony degree: {polyphony_degree}')
-            print("Warning: some examples could not be used (possibly all too short or duplicate filenames or amount of files is not enough to reach polyphony degree).")
-            break
-
-def generate_mix_batches(raw_data, noise_data, max_polyphony_degree, segment_length_in_s, sampling_rate, batch_size=100, random_seed=None):
-    batch = []
-    for example in generate_mix_examples(raw_data, noise_data, max_polyphony_degree, segment_length_in_s, sampling_rate, random_seed):
-        batch.append(example)
-        if len(batch) == batch_size:
-            yield batch
-            batch = []
-    if batch:
-        yield batch
-
-def process_in_batches(dataset, process_fn, cache_dir, prefix="", batch_size=100, remove_columns=None):
+def process_in_batches(dataset, process_fn, cache_dir, prefix="", batch_size=100, remove_columns=None, batched=False, num_proc=1):
     """
     Generic batch processor for datasets.
     
     Args:
         dataset: Dataset to process.
-        process_fn: Function to apply to each batch.
+        process_fn: Function to apply to each batch or example.
         cache_dir: Directory to store batch caches.
         prefix: Optional prefix for cache filenames.
         batch_size: Number of samples per batch.
+        batched: If True, process_fn receives a list of examples (batched)
     
     Returns:
         Concatenated processed dataset.
     """
+
     processed_datasets = []
     total_samples = len(dataset)
     
@@ -326,12 +127,187 @@ def process_in_batches(dataset, process_fn, cache_dir, prefix="", batch_size=100
         
         batch_dataset = dataset.select(range(i, end_idx))
         cache_file = os.path.join(cache_dir, f"{prefix}_batch_{i}_{end_idx}_cache.arrow")
-        batch_processed = batch_dataset.map(process_fn, cache_file_name=cache_file, remove_columns=remove_columns)
+        
+        batch_processed = batch_dataset.map(
+            process_fn,
+            cache_file_name=cache_file,
+            remove_columns=remove_columns,
+            batch_size=batch_size,
+            batched=batched,
+            num_proc=num_proc
+        )
         
         processed_datasets.append(batch_processed)
     
     print(f"Concatenating {len(processed_datasets)} batches...")
     return concatenate_datasets(processed_datasets)
+
+# def process_batches_in_parallel(dataset, process_batch_fn, batch_size=100, num_workers=1):
+#     """
+#     Generic batch processor for parallel processing of datasets.
+    
+#     Args:
+#         dataset: Dataset to process.
+#         process_batch_fn: Function to apply to each batch.
+#         batch_size: Number of samples per batch.
+    
+#     Returns:
+#         Concatenated processed dataset.
+#     """
+
+#     results = []
+
+#      # Split dataset into batches
+#     batches = [dataset.select(range(i,i+batch_size)) for i in range(0, len(dataset), batch_size)]
+
+#     with Pool(num_workers) as pool:
+#         results = pool.map(process_batch_fn, batches)
+    
+#     # Flatten list of batches
+#     processed_examples = [ex for batch in results for ex in batch]
+#     return processed_examples
+
+# def process_batches_in_parallel(dataset, process_batch_fn, batch_size=100, num_workers=1):
+#     """
+#     Parallel batch processor. Safe for TF1 sessions.
+#     """
+
+#     # Create list of Dataset batches
+#     batches = [
+#         dataset.select(range(i, min(i+batch_size, len(dataset))))
+#         for i in range(0, len(dataset), batch_size)
+#     ]
+
+#     import pickle
+
+#     # Test if your function is picklable
+#     try:
+#         pickle.dumps(process_batch_fn)
+#         print("Function is picklable!")
+#     except Exception as e:
+#         print(f"Function is NOT picklable: {e}")
+
+#     with Pool(num_workers) as pool:
+#         print("Entered pool.")
+#         batch_results = pool.map(process_batch_fn, batches)
+
+#     # Flatten list of lists
+#     all_examples = [ex for batch in batch_results for ex in batch]
+
+#     # Convert back to HF Dataset
+#     return Dataset.from_list(all_examples)
+
+# def process_batches_in_parallel(dataset, process_batch_fn, batch_size=100, num_workers=1, initializer=None, initargs=()):
+#     batches = [
+#         dataset.select(range(i, min(i+batch_size, len(dataset))))
+#         for i in range(0, len(dataset), batch_size)
+#     ]
+    
+#     # with Pool(num_workers, initializer=initializer, initargs=initargs) as pool:
+#     #     batch_results = pool.map(process_batch_fn, batches)
+
+#     with get_context('spawn').Pool(num_workers, initializer=initializer) as pool:
+#         batch_results = pool.map(process_batch_fn, batches)
+    
+#     all_examples = [ex for batch in batch_results for ex in batch]
+#     return Dataset.from_list(all_examples)
+
+def process_batches_in_parallel(dataset, process_batch_fn, batch_size=100, 
+                                 num_workers=1, initializer=None, initargs=()):
+    batches = [
+        dataset.select(range(i, min(i+batch_size, len(dataset))))
+        for i in range(0, len(dataset), batch_size)
+    ]
+    
+    with get_context('spawn').Pool(num_workers, initializer=initializer, 
+                                     initargs=initargs) as pool:
+        batch_results = pool.map(process_batch_fn, batches)
+    
+    all_examples = [ex for batch in batch_results for ex in batch]
+    return Dataset.from_list(all_examples)
+
+
+# def parallel_batch_processing(dataset, model_dir, checkpoint, batch_size=16, num_workers=4):
+#     # Split dataset into batches
+#     batches = [dataset[i:i+batch_size] for i in range(0, len(dataset), batch_size)]
+    
+#     with Pool(num_workers) as pool:
+#         func = partial(process_batch, model_dir=model_dir, checkpoint=checkpoint)
+#         results = pool.map(func, batches)
+    
+#     # Flatten list of batches
+#     processed_examples = [ex for batch in results for ex in batch]
+#     return processed_examples
+
+# def process_batch(batch_examples, model_dir, checkpoint):
+#     # Load a new TF session for this batch
+#     session, input_node, output_node = load_separation_model(model_dir, checkpoint)
+    
+#     batch_processed = batch_dataset.map(
+#             process_fn,
+#             cache_file_name=cache_file,
+#             remove_columns=remove_columns,
+#             batch_size=batch_size,
+#             batched=batched,
+#             num_proc=num_proc
+#         )
+    
+#     # Attach sources to examples
+#     for ex, sources in zip(batch_examples, separated_batch):
+#         ex['sources'] = [{"audio": {"array": np.array(src), "sampling_rate": sr}, "detections": []} 
+#                          for src in sources]
+    
+#     session.close()
+#     return batch_examples
+
+# def process_batch(batch_examples, model_dir, checkpoint):
+#     # Load a new TF session for this batch
+#     session, input_node, output_node = load_separation_model(model_dir, checkpoint)
+    
+#     separated_batch, sr = separate_batch_stacked(
+#         session, input_node, output_node,
+#         [ex['audio']['array'] for ex in batch_examples],
+#         sampling_rate=22050
+#     )
+    
+#     # Attach sources to examples
+#     for ex, sources in zip(batch_examples, separated_batch):
+#         ex['sources'] = [{"audio": {"array": np.array(src), "sampling_rate": sr}, "detections": []} 
+#                          for src in sources]
+    
+#     session.close()
+#     return batch_examples
+
+
+# def process_in_batches(dataset, process_fn, cache_dir, prefix="", batch_size=100, remove_columns=None):
+#     """
+#     Generic batch processor for datasets.
+    
+#     Args:
+#         dataset: Dataset to process.
+#         process_fn: Function to apply to each batch.
+#         cache_dir: Directory to store batch caches.
+#         prefix: Optional prefix for cache filenames.
+#         batch_size: Number of samples per batch.
+    
+#     Returns:
+#         Concatenated processed dataset.
+#     """
+#     processed_datasets = []
+#     total_samples = len(dataset)
+    
+#     for i in range(0, total_samples, batch_size):
+#         end_idx = min(i + batch_size, total_samples)
+#         print(f"Processing batch {i//batch_size + 1}/{(total_samples + batch_size - 1)//batch_size}...")
+        
+#         batch_dataset = dataset.select(range(i, end_idx))
+#         cache_file = os.path.join(cache_dir, f"{prefix}_batch_{i}_{end_idx}_cache.arrow")
+#         batch_processed = batch_dataset.map(process_fn, cache_file_name=cache_file, remove_columns=remove_columns)
+        
+#         processed_datasets.append(batch_processed)
+    
+#     print(f"Concatenating {len(processed_datasets)} batches...")
+#     return concatenate_datasets(processed_datasets)
 
 
 

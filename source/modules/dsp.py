@@ -1,8 +1,13 @@
 import numpy as np
 import librosa
+import librosa.display
 import soundfile as sf
 from scipy.ndimage import uniform_filter1d
 import os
+
+import matplotlib.pyplot as plt
+from matplotlib import gridspec
+from pathlib import Path
 
 def detect_event_bounds(audio_array,
                        sr=22050,
@@ -227,14 +232,6 @@ def stft_mask_bandpass(y, sr,
 
     return y_out, bounds_list
 
-import numpy as np
-import librosa
-import librosa.display
-import matplotlib.pyplot as plt
-from matplotlib import gridspec
-from pathlib import Path
-import ast
-
 def plot_save_mel_spectrogram(audio_array, sampling_rate, filename=None, details=None, output_dir=None):
     """
     Takes audio_array and sampling_rate as input. Computes Mel spectrogram, plot waveform + spectrogram,
@@ -306,7 +303,7 @@ def plot_save_mel_spectrogram(audio_array, sampling_rate, filename=None, details
         print(f"Saved Mel spectrogram to: {save_path}")
 
     
-def segment_audio(audio_array, sampling_rate, segment_length, keep_incomplete=False):
+def segment_audio(audio_array, sampling_rate, segment_length_in_s, keep_incomplete=False):
     """
     Splits an audio array into fixed-length segments.
     If keep_incomplete=True, the last (possibly shorter) segment is kept.
@@ -324,7 +321,7 @@ def segment_audio(audio_array, sampling_rate, segment_length, keep_incomplete=Fa
             - "start_time" (float): Start time in seconds.
             - "end_time" (float): End time in seconds.
     """
-    samples_per_segment = int(sampling_rate * segment_length)
+    samples_per_segment = int(sampling_rate * segment_length_in_s)
     total_samples = len(audio_array)
     segments = []
 
@@ -574,7 +571,3 @@ def extract_relevant_bounds(segment_start_time, segment_end_time, time_freq_boun
         relevant_bounds.append((relative_start, relative_end, low_f, high_f))
 
     return relevant_bounds
-
-
-
-
