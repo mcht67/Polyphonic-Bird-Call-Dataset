@@ -86,22 +86,6 @@ def analyze_with_birdnetlib(audio_array, original_sampling_rate, birdnet_samplin
             detections = None
 
         return detections
-    
-# def analyze_example(example):
-
-#     # get all sources
-#     sources = example['sources']
-    
-#     # analyze all sources with birdnetlib
-#     for source in sources:
-#         source_array = np.array(source['audio']['array'])
-#         source_sampling_rate = source['audio']['sampling_rate']
-#         detections = analyze_with_birdnetlib(source_array, source_sampling_rate)
-#         source['detections'] = detections
-
-#     return {"sources": sources}
-
-# global variable for every worker
 
 def analyze_example(example):
 

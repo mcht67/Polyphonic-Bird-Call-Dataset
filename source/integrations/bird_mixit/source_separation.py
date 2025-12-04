@@ -79,99 +79,6 @@ def separate_audio(session,
     output_numpy = np.squeeze(output_numpy, axis=0)  # [sources, samples]
     return output_numpy, target_sr
 
-# def separate_batch(session,
-#                   input_node,
-#                   output_node,
-#                   audio_list,
-#                   input_sampling_rate):
-
-#     results = []
-#     for audio in audio_list:
-#         separated, output_sampling_rate = separate_audio(session,
-#                                        input_node,
-#                                        output_node,
-#                                        audio,
-#                                        input_sampling_rate)
-#         results.append(separated)
-#     return results, output_sampling_rate
-
-# def separate_batch_stacked(session,
-#                          input_node,
-#                          output_node,
-#                          audio_list,
-#                          sampling_rate,
-#                          target_sr=22050):
-#     """
-#     Process a batch of numpy arrays using a single model execution.
-
-#     Returns:
-#         output_batch: numpy array with shape [N, num_sources, samples]
-#         target_sr: sampling rate (22.05 kHz for this model)
-#     """
-
-#     processed = []
-
-#     # Preprocess individually: enforce mono, resample, convert dtype
-#     for audio in audio_list:
-#         if audio.ndim != 1:
-#             audio = np.mean(audio, axis=0)
-
-#         if sampling_rate != target_sr:
-#             audio = resample(audio, orig_sr=sampling_rate, target_sr=target_sr)
-
-#         processed.append(audio.astype(np.float32))
-
-#     # Determine maximum length and pad to uniform size
-#     max_len = max(len(x) for x in processed)
-#     padded = [np.pad(x, (0, max_len - len(x))) for x in processed]
-
-#     # Stack into a batch tensor [N, 1, samples]
-#     batch_input = np.stack(padded, axis=0)
-#     batch_input = batch_input[:, np.newaxis, :]
-
-#     # Forward pass once for all inputs
-#     output_batch = session.run(output_node, feed_dict={input_node: batch_input})
-
-#     # Shape typically becomes [N, num_sources, samples]
-#     return output_batch, target_sr
-
-# def separate_examples_batch(examples, separation_session_data, target_sr=22050):
-#     """
-#     Process a batch of examples (dicts with 'audio' key) using separate_batch_stacked.
-#     Returns updated examples with 'sources' key filled.
-#     """
-#     session, input_node, output_node = separation_session_data
-
-#     # Collect audio arrays
-#     audio_arrays = [audio['array'] for audio in examples['audio']]
-#     sampling_rates = [audio['sampling_rate'] for audio in examples['audio']]
-
-#     # If sampling rates differ, resample each audio to target_sr
-#     audio_arrays_resampled = []
-#     for audio, sr in zip(audio_arrays, sampling_rates):
-#         if sr != target_sr:
-#             from librosa import resample
-#             audio = resample(audio, orig_sr=sr, target_sr=target_sr)
-#         audio_arrays_resampled.append(audio)
-
-#     # Run batch separation
-#     separated_batch, output_sr = separate_batch_stacked(
-#         session, input_node, output_node,
-#         audio_arrays_resampled, target_sr, target_sr=target_sr
-#     )
-
-#     # Build sources back into examples
-#     updated_examples = []
-#     for ex, separated in zip(examples, separated_batch):
-#         ex['sources'] = [
-#             {"audio": {"array": np.array(source), "sampling_rate": output_sr}, "detections": []}
-#             for source in separated
-#         ]
-#         updated_examples.append(ex)
-
-#     return updated_examples
-
-
 def separate_example(example, separation_session_data=None):
 
     # get audio, filename and ebird-code
@@ -190,52 +97,18 @@ def separate_example(example, separation_session_data=None):
 
     return example
 
-# def separate_batch(batch, model_dir, checkpoint):
-
-#     # Load source separation model
-#     session, input_node, output_node = load_separation_model(model_dir=model_dir, 
-#                             checkpoint=checkpoint)
-#     separation_session_data = (session, input_node, output_node)
-
-#     results = []
-#     for example in batch:
-#         example = separate_example(example, separation_session_data)
-#     return batch
-
-# def separate_batch(batch, model_dir, checkpoint):
-#     session, input_node, output_node = load_separation_model(model_dir=model_dir, 
-#                                                               checkpoint=checkpoint)
-#     separation_session_data = (session, input_node, output_node)
-    
-#     processed_examples = []
-#     for example in batch:
-#         processed_example = separate_example(example, separation_session_data)
-#         processed_examples.append(processed_example)
-    
-#     return processed_examples 
-
 # Global variable for worker processes
 _separation_session = None
 
-# def init_separation_worker(model_dir, checkpoint):
-#     """Initialize model once per worker process"""
-#     global _separation_session
-#     _separation_session = load_separation_model(model_dir=model_dir, 
-#                                                  checkpoint=checkpoint)
-#     print(f"Worker {os.getpid()} initialized model")
-
 def init_separation_worker(model_dir, checkpoint):
     """Initialize model once per worker process"""
-    print(f"DEBUG: init_separation_worker called")
-    print(f"  Received model_dir: {model_dir}")
-    print(f"  Received checkpoint: {checkpoint}")
 
     import os
     import tensorflow as tf
     
     print(f"Worker {os.getpid()} starting initialization")
     print(f"  model_dir: {model_dir}")
-    print(f"  checkpoint: {checkpoint}")  # Debug: verify it's not None
+    print(f"  checkpoint: {checkpoint}")
     
     # Disable TensorFlow parallelism
     os.environ['OMP_NUM_THREADS'] = '1'
@@ -258,51 +131,6 @@ def separate_batch(batch):
         results.append(processed_example)
     
     return results
-
-# def separate_batch(batch_dataset, model_dir, checkpoint):
-#     """
-#     Processes a batch (HuggingFace Dataset) inside a worker process.
-#     Loads TF model once per worker, then processes all examples.
-#     """
-#     # Load TF1 separation model (safe inside worker)
-#     session, input_node, output_node = load_separation_model(
-#         model_dir=model_dir, 
-#         checkpoint=checkpoint
-#     )
-#     separation_session_data = (session, input_node, output_node)
-
-#     # Convert HF Dataset → python list of dict examples
-#     batch = batch_dataset.to_list()
-
-#     processed_examples = []
-
-#     for example in batch:
-#         processed = separate_example(example, separation_session_data)
-#         processed_examples.append(processed)
-
-#     return processed_examples
-
-
-# def separate_examples_parallel(examples, separation_session_data):
-#     """
-#     Process a list of examples in parallel using Python multiprocessing.
-#     Each example is processed individually with the TF1 model.
-#     """
-
-#     from multiprocessing import Pool, cpu_count
-
-#     # Worker function
-#     def worker(example):
-#         return separate_example(example, separation_session_data)
-
-#     # Number of processes
-#     n_processes = min(cpu_count(), len(examples))
-
-#     with Pool(processes=n_processes) as pool:
-#         results = pool.map(worker, examples)
-
-#     return results
-
 
 ############################
 # Legacy
