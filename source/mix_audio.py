@@ -6,9 +6,9 @@ from omegaconf import OmegaConf
 from datasets import load_from_disk, Sequence, Value, Features, Audio, Dataset
 from librosa import resample
 
-from modules.dataset import flatten_features, concatenate_datasets, duration_s_to_num_samples, filter_dataset_by_audio_array_length, flatten_raw_examples
+from modules.dataset import flatten_features, concatenate_datasets, filter_dataset_by_audio_array_length, flatten_raw_examples
 from modules.utils import IndexMap
-from modules.dsp import calculate_rms, normalize_to_dBFS, dBFS_to_gain, num_samples_to_duration_s
+from modules.dsp import calculate_rms, normalize_to_dBFS, dBFS_to_gain, num_samples_to_duration_s, duration_s_to_num_samples
 
 def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, signal_levels, snr_values, mix_levels, segment_length_in_s, sampling_rate, random_seed=None):
 
@@ -196,7 +196,7 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, signal_lev
         raw_data = skipped_examples
         if len(raw_data) == previous_len:
             print("Warning: some examples could not be used (possibly all too short or duplicate filenames or amount of files is not enough to reach polyphony degree).")
-            print(f'Files left: {[e['original_file']for e in raw_data]}')
+            print(f'Files left: {[e["original_file"]for e in raw_data]}')
             print(f'polyphony degree: {polyphony_degree}')
             break
 

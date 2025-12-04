@@ -1,10 +1,10 @@
-from datasets import load_from_disk, Audio
+from datasets import load_from_disk
 from omegaconf import OmegaConf
 import psutil
 import time
 
-from integrations.birdnetlib.analyze import analyze_example, analyze_batch, init_analyzation_worker
-from modules.dataset import process_in_batches, process_batches_in_parallel
+from integrations.birdnetlib.analyze import analyze_batch, init_analyzation_worker
+from modules.dataset import process_batches_in_parallel
 
 def main():
 

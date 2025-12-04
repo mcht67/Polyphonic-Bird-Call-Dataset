@@ -6,7 +6,7 @@ from omegaconf import OmegaConf
 
 from modules.dsp import detect_event_bounds, stft_mask_bandpass, segment_audio, pad_audio_end, num_samples_to_duration_s, remove_segments_without_events, extract_relevant_bounds, plot_save_mel_spectrogram
 
-from integrations.birdnetlib.analyze import check_dominant_species, only_target_bird_detected
+from integrations.birdnetlib.detections import check_dominant_species, only_target_bird_detected
 from integrations.birdset.utils import validate_species_tag_multi, birdset_code_to_ebird_taxonomy
 
 def get_validated_sources(example, birdset_subset, confidence_threshold=0.9, min_detection_percentage=0.9):
