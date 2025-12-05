@@ -24,6 +24,12 @@ analysis:
 
 segmentation:
   segment_length_in_s: 5
+#   min_confidence: 0.9
+# min_detection_percentage: 0.9
+
+balance_dataset:
+  method: undersample
+  max_per_file: None
 
 mix:
   max_polyphony_degree: 6

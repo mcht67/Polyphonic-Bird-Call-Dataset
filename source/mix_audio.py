@@ -200,9 +200,9 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, signal_lev
             print(f'polyphony degree: {polyphony_degree}')
             break
 
-def generate_mix_batches(raw_data, noise_data, max_polyphony_degree, segment_length_in_s, sampling_rate, batch_size=100, random_seed=None):
+def generate_mix_batches(raw_data, noise_data, max_polyphony_degree, signal_levels, snr_values, mix_levels, segment_length_in_s, sampling_rate, batch_size=100, random_seed=None):
     batch = []
-    for example in generate_mix_examples(raw_data, noise_data, max_polyphony_degree, segment_length_in_s, sampling_rate, random_seed):
+    for example in generate_mix_examples(raw_data, noise_data, max_polyphony_degree, signal_levels, snr_values, mix_levels, segment_length_in_s, sampling_rate, random_seed):
         batch.append(example)
         if len(batch) == batch_size:
             yield batch
@@ -215,7 +215,7 @@ def main():
     print("Start mixing audio...")
 
     # Load the parameters from the config file
-    cfg = OmegaConf.load("config.yaml")
+    cfg = OmegaConf.load("params.yaml")
     balanced_data_path = cfg.paths.balanced_data
     noise_data_path = cfg.paths.noise_data
     polyphonic_dataset_path = cfg.paths.polyphonic_data
@@ -223,7 +223,10 @@ def main():
     segment_length_in_s = cfg.segmentation.segment_length_in_s
     random_seed = cfg.random.random_seed
     max_polyphony_degree = cfg.mix.max_polyphony_degree
-    
+
+    signal_levels = cfg.mix.signal_levels
+    snr_values = cfg.mix.snr_values
+    mix_levels = cfg.mix.mix_levels
 
     # Load balanced dataset
     balanced_dataset = load_from_disk(balanced_data_path)
@@ -268,7 +271,9 @@ def main():
     balanced_dataset.cast_column("audio", Audio())
 
     for i, batch in enumerate(generate_mix_batches(balanced_dataset, noise_dataset,
-                                               max_polyphony_degree, segment_length_in_s, 
+                                               max_polyphony_degree, 
+                                               signal_levels, snr_values, mix_levels,
+                                               segment_length_in_s, 
                                                sampling_rate, random_seed=random_seed)):
         ds = Dataset.from_list(batch, features=mix_features)
         print(f'finished batch {i}')

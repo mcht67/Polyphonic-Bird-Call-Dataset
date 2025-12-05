@@ -1,0 +1,108 @@
+
+# TODO: Python script or Hydra to generate params.yaml, if I want to track data/ with dvc and have version control.
+
+vars:
+  - params.yaml
+
+stages:
+  load_datasets:
+    cmd: python source/load_datasets.py
+    deps:
+      - source/load_datasets.py
+    params:
+      - dataset.subset
+      - paths.raw_data
+      - paths.test_data
+      - paths.noise_data
+    outs:
+      - data/${dataset.subset}/raw:
+          cache: false
+      - data/${dataset.subset}/test:
+          cache: false
+      - data/${dataset.subset}/noise:
+          cache: false
+
+  separate_audio:
+    cmd: python source/separate_audio.py
+    deps:
+      - source/separate_audio.py
+      - data/${dataset.subset}/raw
+      - source/integrations/bird_mixit/source_separation.py
+      - source/modules/dataset.py
+    params:
+      - dataset.subset
+      - paths.raw_data
+      - paths.source_separated_data
+      - source_separation
+    outs:
+      - data/${dataset.subset}/source_separated:
+          cache: false
+    
+  analyze_audio:
+    cmd: conda run --no-capture-output -n birdnetlib python source/analyze_audio.py
+    deps:
+      - source/analyze_audio.py
+      - data/${dataset.subset}/source_separated
+      - source/integrations/birdnetlib/analyze.py
+      - source/modules/dataset.py
+    params:
+      - dataset.subset
+      - paths.source_separated_data
+      - paths.birdnetlib_analyzed_data
+      #- analysis
+    outs:
+      - data/${dataset.subset}/birdnetlib_analyzed:
+          cache: false
+
+  segment_audio:
+    cmd: python source/segment_audio.py
+    deps:
+      - source/segment_audio.py
+      - data/${dataset.subset}/birdnetlib_analyzed
+      - source/modules/dsp.py
+      - source/integrations/birdnetlib/detections.py
+      - source/integrations/birdset/utils.py
+    params:
+      - dataset.subset
+      - paths.birdnetlib_analyzed_data
+      - paths.segmented_data
+      - segmentation
+    outs:
+      - data/${dataset.subset}/segmented:
+          cache: false
+
+  balance_dataset:
+    cmd: python source/balance_dataset.py
+    deps:
+      - source/balance_dataset.py
+      - data/${dataset.subset}/segmented
+      - source/modules/dataset.py
+    params:
+      - dataset.subset
+      - paths.segmented_data
+      - paths.balanced_data
+      - random.random_seed
+      - balance_dataset
+    outs:
+      - data/${dataset.subset}/balanced:
+          cache: false
+
+  mix_audio:
+    cmd: python source/mix_audio.py
+    deps:
+      - source/mix_audio.py
+      - data/${dataset.subset}/balanced
+      - data/${dataset.subset}/noise
+      - source/modules/dsp.py
+      - source/modules/utils.py
+      - source/modules/dataset.py
+    params:
+      - dataset.subset
+      - random.random_seed
+      - paths.balanced_data
+      - paths.noise_data
+      - paths.polyphonic_data
+      - mix
+    outs:
+      - data/${dataset.subset}/polyphonic:
+          cache: false

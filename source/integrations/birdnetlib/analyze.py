@@ -7,15 +7,6 @@ import ast
 
 import os
 
-# os.environ["MPLBACKEND"] = "Agg"  # Fastest backend, no GUI
-
-# # Optional: prevent pyplot import entirely
-# import sys, types
-# sys.modules['matplotlib.pyplot'] = types.ModuleType("pyplot")
-
-# import matplotlib
-# matplotlib.use("Agg")
-
 from birdnetlib import RecordingBuffer
 from birdnetlib.analyzer import Analyzer
 
@@ -96,7 +87,7 @@ def analyze_with_birdnetlib(audio_array, original_sampling_rate, birdnet_samplin
 
         return detections
 
-def analyze_example(example, target_sr=48000):
+def analyze_example(example):
 
     # get all sources
     sources = example['sources']
@@ -108,16 +99,15 @@ def analyze_example(example, target_sr=48000):
         source_sampling_rate = source['audio']['sampling_rate']
 
         # Resample if needed
-        if source_sampling_rate != target_sr:
-            #print("Need to resample from", source_sampling_rate, "kHz to", target_sr, "kHz. This is inefficient. Resampling should be done beforehand.")
+        if source_sampling_rate != _birdnetlib_sampling_rate:
             source_array = resample(source_array,
                                 orig_sr=source_sampling_rate,
-                                target_sr=target_sr)
+                                target_sr=_birdnetlib_sampling_rate)
 
         recording = RecordingBuffer(
             _analyzer,
             buffer=source_array,          
-            rate=source_sampling_rate,             
+            rate=_birdnetlib_sampling_rate,             
             min_conf=0.2
         )
 
@@ -128,11 +118,14 @@ def analyze_example(example, target_sr=48000):
     return example
 
 _analyzer = None
+_birdnetlib_sampling_rate = int(0)
 
-def init_analyzation_worker():
+def init_analyzation_worker(birdnet_sampling_rate):
     "Start initilization of worker."
     global _analyzer
+    global _birdnetlib_sampling_rate
     _analyzer = Analyzer()
+    _birdnetlib_sampling_rate = birdnet_sampling_rate
     "Initilization of worker succesful."
 
 def analyze_batch(batch):

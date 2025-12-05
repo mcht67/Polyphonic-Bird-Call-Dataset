@@ -38,6 +38,10 @@ def balance_dataset_by_species(dataset, method="undersample", seed=42, max_per_f
         raise ValueError("'scientific_name' column not found in dataset.")
     if method == "controlled_oversample" and 'original_file' not in dataset.column_names:
         raise ValueError("'original_file' column required for controlled_oversample method.")
+    
+    if len(dataset) == 0:
+        print("An empty dataset can not be balanced.")
+        return dataset
 
     random.seed(seed)
 
@@ -48,6 +52,7 @@ def balance_dataset_by_species(dataset, method="undersample", seed=42, max_per_f
     
     # Determine target count
     counts = [len(indices) for indices in species_to_indices.values()]
+    
     if method == "undersample":
         target_count = min(counts)
     elif method in ["oversample", "controlled_oversample"]:
@@ -145,7 +150,16 @@ def process_in_batches(dataset, process_fn, cache_dir, prefix="", batch_size=100
 
 def process_batches_in_parallel(dataset, process_batch_fn, batch_size=100, 
                                  num_workers=1, initializer=None, initargs=()):
+     
+    if not dataset or len(dataset) == 0:
+        raise ValueError("Dataset can not be empty")
     
+    if batch_size < 1:
+        raise ValueError(f"batch_size has to be >= 1, actual: {batch_size}")
+    
+    if num_workers < 1:
+        raise ValueError(f"num_workers has to be >= 1, actual: {num_workers}")
+
     batches = [
         dataset.select(range(i, min(i+batch_size, len(dataset))))
         for i in range(0, len(dataset), batch_size)

@@ -1,8 +1,16 @@
+import sys
+import os
+print(f"Python executable: {sys.executable}")
+print(f"Python path: {sys.path}")
+print(f"Working directory: {os.getcwd()}")
+print(f"Environment: {os.environ.get('VIRTUAL_ENV', 'No venv')}")
+
+
 from datasets import load_from_disk, Audio, Features, Sequence, Value
 from omegaconf import OmegaConf
-from functools import partial
 import psutil
 import time
+from math import ceil
 
 from integrations.bird_mixit.source_separation import separate_batch, init_separation_worker
 from modules.dataset import process_batches_in_parallel
@@ -13,7 +21,7 @@ def main():
     print("Start separating audio...")
 
     # Load the parameters from the config file
-    cfg = OmegaConf.load("config.yaml")
+    cfg = OmegaConf.load("params.yaml")
     raw_data_path = cfg.paths.raw_data
     source_separated_data_path = cfg.paths.source_separated_data
 
@@ -23,7 +31,7 @@ def main():
     
     # Load raw dataset
     raw_dataset = load_from_disk(raw_data_path)
-    raw_dataset = raw_dataset.select(range(80))
+    raw_dataset = raw_dataset.select(range(10))
     raw_dataset = raw_dataset.cast_column("audio", Audio(sampling_rate=sampling_rate))
 
     # Define the schema for the new column holding the sources data
@@ -46,7 +54,7 @@ def main():
     raw_dataset = raw_dataset.add_column("sources", empty_sources, feature=source_features["sources"])
 
     num_workers = psutil.cpu_count(logical=False) or psutil.cpu_count()
-    batch_size = int((len(raw_dataset) + 1) / num_workers)
+    batch_size = ceil((len(raw_dataset) + 1) / num_workers)
 
     # Calculate the start time
     start = time.time()
@@ -54,11 +62,11 @@ def main():
     # NEW - pass separate_batch directly, no partial needed
     separated_dataset = process_batches_in_parallel(
         raw_dataset, 
-        process_batch_fn=separate_batch,  # No partial!
+        process_batch_fn=separate_batch,
         batch_size=batch_size,
         num_workers=num_workers,
         initializer=init_separation_worker,
-        initargs=(model_dir, checkpoint)  # Pass params here
+        initargs=(model_dir, checkpoint)
     )
 
     # Calculate the end time and time taken

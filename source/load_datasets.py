@@ -33,7 +33,7 @@ def main():
     print("Start loading datasets...")
     
     # Load the parameters from the config file
-    cfg = OmegaConf.load("config.yaml")
+    cfg = OmegaConf.load("params.yaml")
     dataset_subset = cfg.dataset.subset
     raw_data_path = cfg.paths.raw_data
     test_data_path = cfg.paths.test_data

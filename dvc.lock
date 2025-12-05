@@ -1,0 +1,261 @@
+schema: '2.0'
+stages:
+  load_datasets:
+    cmd: python source/load_datasets.py
+    deps:
+    - path: source/load_datasets.py
+      hash: md5
+      md5: c572f4dee7f8fdce0daeb65315fab150
+      size: 2217
+    params:
+      params.yaml:
+        dataset.subset: HSN
+        paths.noise_data: data/${dataset.subset}/noise
+        paths.raw_data: data/${dataset.subset}/raw
+        paths.test_data: data/${dataset.subset}/test
+    outs:
+    - path: data/HSN/noise
+      hash: md5
+      md5: a05e4a2fda7052b2762677bd635c0881.dir
+      size: 135979757
+      nfiles: 3
+    - path: data/HSN/raw
+      hash: md5
+      md5: b8d49c657b18a364945689f4efe53df2.dir
+      size: 5613438682
+      nfiles: 10
+    - path: data/HSN/test
+      hash: md5
+      md5: 0a9bfe4618c23bb5d609b7aa467e153d.dir
+      size: 357874781
+      nfiles: 3
+  separate_audio:
+    cmd: python source/separate_audio.py
+    deps:
+    - path: data/HSN/raw
+      hash: md5
+      md5: b8d49c657b18a364945689f4efe53df2.dir
+      size: 5613438682
+      nfiles: 10
+    - path: source/integrations/bird_mixit/source_separation.py
+      hash: md5
+      md5: ffa448224f6248c25028e658a006bfaf
+      size: 12934
+    - path: source/modules/dataset.py
+      hash: md5
+      md5: 4a4c8387758b36e36f9ae4f9c8ec73a8
+      size: 6895
+    - path: source/separate_audio.py
+      hash: md5
+      md5: 0e72effa837533ee02546eda987c93da
+      size: 2957
+    params:
+      params.yaml:
+        dataset.subset: HSN
+        paths.raw_data: data/${dataset.subset}/raw
+        paths.source_separated_data: data/${dataset.subset}/source_separated
+        source_separation:
+          model_dir: resources/bird_mixit_model_checkpoints/output_sources4
+          checkpoint: 
+            resources/bird_mixit_model_checkpoints/output_sources4/model.ckpt-3223090
+          sampling_rate: 22050
+    outs:
+    - path: data/HSN/source_separated
+      hash: md5
+      md5: 3b4a3d1a58db869d2c9a4d1016b02b53.dir
+      size: 389301318
+      nfiles: 3
+  analyze_audio:
+    cmd: conda run --no-capture-output -n birdnetlib python 
+      source/analyze_audio.py
+    deps:
+    - path: data/HSN/source_separated
+      hash: md5
+      md5: 3b4a3d1a58db869d2c9a4d1016b02b53.dir
+      size: 389301318
+      nfiles: 3
+    - path: source/analyze_audio.py
+      hash: md5
+      md5: a759c2ca896e9f470ea5a98bf294248d
+      size: 1822
+    - path: source/integrations/birdnetlib/analyze.py
+      hash: md5
+      md5: 2e622e34735d48c8bbe2581fc0ae5e56
+      size: 4149
+    - path: source/modules/dataset.py
+      hash: md5
+      md5: 4a4c8387758b36e36f9ae4f9c8ec73a8
+      size: 6895
+    params:
+      params.yaml:
+        dataset.subset: HSN
+        paths.birdnetlib_analyzed_data: 
+          data/${dataset.subset}/birdnetlib_analyzed
+        paths.source_separated_data: data/${dataset.subset}/source_separated
+    outs:
+    - path: data/HSN/birdnetlib_analyzed
+      hash: md5
+      md5: fb3598010c37613634d76b91b613c61d.dir
+      size: 648883008
+      nfiles: 4
+  segment_audio:
+    cmd: python source/segment_audio.py
+    deps:
+    - path: data/HSN/birdnetlib_analyzed
+      hash: md5
+      md5: fb3598010c37613634d76b91b613c61d.dir
+      size: 648883008
+      nfiles: 4
+    - path: source/integrations/birdnetlib/detections.py
+      hash: md5
+      md5: 3c0dbd277f7731ed96dfedd64dc488db
+      size: 2684
+    - path: source/integrations/birdset/utils.py
+      hash: md5
+      md5: c7a7294ca115b886f81626d3bb6fb641
+      size: 4414
+    - path: source/modules/dsp.py
+      hash: md5
+      md5: e440682090ba752124ff4bfbe7980629
+      size: 18750
+    - path: source/segment_audio.py
+      hash: md5
+      md5: 8f6ae162229fe58c5d65e6c79710df3d
+      size: 8388
+    params:
+      params.yaml:
+        dataset.subset: HSN
+        paths.birdnetlib_analyzed_data: 
+          data/${dataset.subset}/birdnetlib_analyzed
+        paths.segmented_data: data/${dataset.subset}/segmented
+        segmentation:
+          segment_length_in_s: 5
+    outs:
+    - path: data/HSN/segmented
+      hash: md5
+      md5: e28d9ef7b2d7a10d04f309416dde2150.dir
+      size: 45879373
+      nfiles: 3
+  balance_dataset:
+    cmd: python source/balance_dataset.py
+    deps:
+    - path: data/HSN/segmented
+      hash: md5
+      md5: e28d9ef7b2d7a10d04f309416dde2150.dir
+      size: 45879373
+      nfiles: 3
+    - path: source/balance_dataset.py
+      hash: md5
+      md5: d4079b11bf4bd3760c1734731d515f88
+      size: 908
+    - path: source/modules/dataset.py
+      hash: md5
+      md5: 4a4c8387758b36e36f9ae4f9c8ec73a8
+      size: 6895
+    params:
+      params.yaml:
+        balance_dataset:
+          method: undersample
+          max_per_file: None
+        dataset.subset: HSN
+        paths.balanced_data: data/${dataset.subset}/balanced
+        paths.segmented_data: data/${dataset.subset}/segmented
+        random.random_seed: 42
+    outs:
+    - path: data/HSN/balanced
+      hash: md5
+      md5: 7a2cce66aa5e95e940019e57a659e934.dir
+      size: 28235621
+      nfiles: 3
+  mix_audio:
+    cmd: python source/mix_audio.py
+    deps:
+    - path: data/HSN/balanced
+      hash: md5
+      md5: 7a2cce66aa5e95e940019e57a659e934.dir
+      size: 28235621
+      nfiles: 3
+    - path: data/HSN/noise
+      hash: md5
+      md5: a05e4a2fda7052b2762677bd635c0881.dir
+      size: 135979757
+      nfiles: 3
+    - path: source/mix_audio.py
+      hash: md5
+      md5: 951dd7a1fa052a63a939080a0eb9089f
+      size: 12265
+    - path: source/modules/dataset.py
+      hash: md5
+      md5: 4a4c8387758b36e36f9ae4f9c8ec73a8
+      size: 6895
+    - path: source/modules/dsp.py
+      hash: md5
+      md5: e440682090ba752124ff4bfbe7980629
+      size: 18750
+    - path: source/modules/utils.py
+      hash: md5
+      md5: 8576c1d6a782895c12b1acc9fd39f54d
+      size: 2413
+    params:
+      params.yaml:
+        dataset.subset: HSN
+        mix:
+          max_polyphony_degree: 6
+          signal_levels:
+          - -12
+          - -11
+          - -10
+          - -9
+          - -8
+          - -7
+          - -6
+          - -5
+          - -4
+          - -3
+          - -2
+          - -1
+          - 0
+          snr_values:
+          - -12
+          - -11
+          - -10
+          - -9
+          - -8
+          - -7
+          - -6
+          - -5
+          - -4
+          - -3
+          - -2
+          - -1
+          - 0
+          - 1
+          - 2
+          - 3
+          - 4
+          - 5
+          - 6
+          - 7
+          - 8
+          - 9
+          - 10
+          - 11
+          - 12
+          mix_levels:
+          - -12
+          - -11
+          - -10
+          - -9
+          - -8
+          - -7
+          - -6
+        paths.balanced_data: data/${dataset.subset}/balanced
+        paths.noise_data: data/${dataset.subset}/noise
+        paths.polyphonic_data: data/${dataset.subset}/polyphonic
+        random.random_seed: 42
+    outs:
+    - path: data/HSN/polyphonic
+      hash: md5
+      md5: c8165bfde84e642ba8bcb71e7cb7fd2a.dir
+      size: 21186402
+      nfiles: 3

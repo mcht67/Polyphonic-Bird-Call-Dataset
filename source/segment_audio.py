@@ -9,7 +9,7 @@ from modules.dsp import detect_event_bounds, stft_mask_bandpass, segment_audio, 
 from integrations.birdnetlib.detections import check_dominant_species, only_target_bird_detected
 from integrations.birdset.utils import validate_species_tag_multi, birdset_code_to_ebird_taxonomy
 
-def get_validated_sources(example, birdset_subset, confidence_threshold=0.9, min_detection_percentage=0.9):
+def get_validated_sources(example, birdset_subset, confidence_threshold=0.2, min_detection_percentage=0.1):
 
     # Init validated sources
     validated_sources = []
@@ -134,7 +134,7 @@ def main():
     print("Start segmenting audio...")
 
     # Load the parameters from the config file
-    cfg = OmegaConf.load("config.yaml")
+    cfg = OmegaConf.load("params.yaml")
     birdnetlib_analyzed_data_path = cfg.paths.birdnetlib_analyzed_data
     segmented_data_path = cfg.paths.segmented_data
 
