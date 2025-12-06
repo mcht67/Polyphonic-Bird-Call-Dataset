@@ -6,7 +6,7 @@ from omegaconf import OmegaConf
 from datasets import load_from_disk, Sequence, Value, Features, Audio, Dataset
 from librosa import resample
 
-from modules.dataset import flatten_features, concatenate_datasets, filter_dataset_by_audio_array_length, flatten_raw_examples
+from modules.dataset import flatten_features, concatenate_datasets, filter_dataset_by_audio_array_length, flatten_raw_examples, balance_dataset_by_species
 from modules.utils import IndexMap
 from modules.dsp import calculate_rms, normalize_to_dBFS, dBFS_to_gain, num_samples_to_duration_s, duration_s_to_num_samples
 
@@ -216,20 +216,30 @@ def main():
 
     # Load the parameters from the config file
     cfg = OmegaConf.load("params.yaml")
-    balanced_data_path = cfg.paths.balanced_data
+    # balanced_data_path = cfg.paths.balanced_data
+    segmented_data_path =  cfg.paths.segmented_data
     noise_data_path = cfg.paths.noise_data
     polyphonic_dataset_path = cfg.paths.polyphonic_data
 
-    segment_length_in_s = cfg.segmentation.segment_length_in_s
+    method = cfg.balance_dataset.method
+    max_per_file = cfg.balance_dataset.max_per_file
     random_seed = cfg.random.random_seed
+
+    segment_length_in_s = cfg.segmentation.segment_length_in_s
     max_polyphony_degree = cfg.mix.max_polyphony_degree
 
     signal_levels = cfg.mix.signal_levels
     snr_values = cfg.mix.snr_values
     mix_levels = cfg.mix.mix_levels
 
-    # Load balanced dataset
-    balanced_dataset = load_from_disk(balanced_data_path)
+    # Load segmented dataset# 
+    segmented_dataset = load_from_disk(segmented_data_path)
+
+    # Balance dataset
+    balanced_dataset = balance_dataset_by_species(segmented_dataset, method, seed=random_seed, max_per_file=max_per_file)
+
+    # # Load balanced dataset
+    # balanced_dataset = load_from_disk(balanced_data_path)
     sampling_rate = balanced_dataset[0]['audio']['sampling_rate']
    
     # Load no bird/noise dataset

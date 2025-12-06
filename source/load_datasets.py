@@ -1,6 +1,7 @@
 from datasets import load_dataset
 from omegaconf import OmegaConf
 import random
+import os
 
 def is_no_bird(example):
         return example['ebird_code'] is None and example['ebird_code_multilabel'] == [] and example['ebird_code_secondary'] is None
@@ -38,6 +39,7 @@ def main():
     raw_data_path = cfg.paths.raw_data
     test_data_path = cfg.paths.test_data
     noise_data_path = cfg.paths.noise_data
+    raw_data_info_path = cfg.paths.raw_data_info
 
     # Load Xeno Canto data
     xc_subset_name = dataset_subset + '_xc'
@@ -51,9 +53,13 @@ def main():
     noise_dataset, test_dataset = separate_to_noise_and_test_split(soundscape_5s_dataset)
 
     # Store datasets
+    raw_dataset = raw_dataset.select(range(10))
     raw_dataset.save_to_disk(raw_data_path)
     test_dataset.save_to_disk(test_data_path)
     noise_dataset.save_to_disk(noise_data_path)
+
+    os.makedirs(raw_data_info_path, exist_ok=True)
+    raw_dataset.info.write_to_directory(raw_data_info_path)
 
     print("Finished loading datasets!")
 

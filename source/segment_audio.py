@@ -135,13 +135,23 @@ def main():
 
     # Load the parameters from the config file
     cfg = OmegaConf.load("params.yaml")
-    birdnetlib_analyzed_data_path = cfg.paths.birdnetlib_analyzed_data
+    # birdnetlib_analyzed_data_path = cfg.paths.birdnetlib_analyzed_data
+    raw_data_path = cfg.paths.raw_data
     segmented_data_path = cfg.paths.segmented_data
 
+    birdset_subset = cfg.dataset.subset
     segment_length_in_s = cfg.segmentation.segment_length_in_s
 
     # Load source separated dataset
-    birdnetlib_analyzed_dataset = load_from_disk(birdnetlib_analyzed_data_path)
+    raw_dataset = load_from_disk(raw_data_path)
+
+    # Check if column 'sources' and nested feature 'detections' exist in raw_dataset
+    if  not "sources" in raw_dataset.column_names:
+        raise Exception("Can not segment Dataset. Dataset does not contain column 'sources'.")
+    elif not "detections" in raw_dataset.features['sources'][0].keys():
+        raise Exception("Can not segment Datasetx. Nested feature 'detections' does not exist in column 'sources'.")
+
+        raw_dataset = add_sources_column(raw_dataset)
 
     # Define features of segments dataset
     segments_dataset_rows = {
@@ -156,8 +166,8 @@ def main():
         }
 
     # Extract segments from examples
-    for example in tqdm(birdnetlib_analyzed_dataset):
-        segments = extract_segments_from_example(example, segment_length_in_s, birdset_subset="HSN")
+    for example in tqdm(raw_dataset):
+        segments = extract_segments_from_example(example, segment_length_in_s, birdset_subset=birdset_subset)
         if segments:
             for row in segments:  # each row is a dict with a single audio dict
                 segments_dataset_rows["audio"].append(row["audio"])

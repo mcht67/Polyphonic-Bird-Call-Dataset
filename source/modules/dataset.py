@@ -6,6 +6,7 @@ import numpy as np
 from datasets import concatenate_datasets, Dataset
 from multiprocessing import Pool, get_context
 from tqdm import tqdm
+import shutil
 
 from modules.dsp import num_samples_to_duration_s
 
@@ -182,6 +183,23 @@ def process_batches_in_parallel(dataset, process_batch_fn, batch_size=100,
     all_examples = [ex for batch in batch_results for ex in batch]
     return Dataset.from_list(all_examples)
 
+def overwrite_dataset(dataset, dataset_path, store_backup=True):
+    # Save to temporary location
+    temp_path = dataset_path + "_temp"
+    os.makedirs(temp_path, exist_ok=True)
+    dataset.save_to_disk(temp_path)
+
+    # Move old data to backup
+    backup_path = dataset_path + "_backup"
+    if os.path.exists(dataset_path):
+        shutil.move(dataset_path, backup_path)
+
+    # Move temp data into place
+    shutil.move(temp_path, dataset_path)
+
+    # Optionally remove backup
+    if not store_backup:
+        shutil.rmtree(backup_path)
 
 
 
