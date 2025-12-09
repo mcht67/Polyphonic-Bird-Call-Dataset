@@ -3,7 +3,9 @@ import os
 import tensorflow.compat.v1 as tf
 import numpy as np
 from librosa import resample
+import gc
 
+from modules.utils import log_memory
 # from integrations.birdnetlib.analyze import get_most_confident_detection, check_dominant_species
 # from integrations.birdset.utils import validate_species_tag_multi
 
@@ -93,7 +95,22 @@ def separate_example(example, separation_session_data=None):
                    input_sampling_rate=audio['sampling_rate']
                    )
     
-    example['sources'] = [{"audio": {"array": np.array(source), "sampling_rate": source_sr}, "detections": []} for source in sources]
+     # Convert sources efficiently without extra copies
+    example['sources'] = [
+        {
+            "audio": {
+                "array": np.array(source.copy()),
+                "sampling_rate": source_sr
+            }, 
+            "detections": []
+        } 
+        for source in sources
+    ]
+    
+    # Explicitly delete the original sources array to free memory
+    del sources
+    
+    #example['sources'] = [{"audio": {"array": np.array(source), "sampling_rate": source_sr}, "detections": []} for source in sources]
 
     return example
 
@@ -130,6 +147,15 @@ def separate_batch(batch):
         print("Worker", os.getpid(), ": Separating example", i+1, "of ", batch_size)
         processed_example = separate_example(example, _separation_session)
         results.append(processed_example)
+
+        # Clean up after each example
+        del processed_example
+
+        print("Separated example:")
+        log_memory()
+    
+    # Force garbage collection after batch
+    gc.collect()
     
     print("Worker", os.getpid(), ": Finished separating batch")
     

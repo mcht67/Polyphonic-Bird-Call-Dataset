@@ -1,6 +1,7 @@
 from datasets import load_dataset
 from omegaconf import OmegaConf
 import random
+import json
 import os
 
 def is_no_bird(example):
@@ -39,7 +40,7 @@ def main():
     raw_data_path = cfg.paths.raw_data
     test_data_path = cfg.paths.test_data
     noise_data_path = cfg.paths.noise_data
-    raw_data_info_path = cfg.paths.raw_data_info
+    raw_data_metadata_path = cfg.paths.raw_data_metadata
 
     # Load Xeno Canto data
     xc_subset_name = dataset_subset + '_xc'
@@ -53,13 +54,25 @@ def main():
     noise_dataset, test_dataset = separate_to_noise_and_test_split(soundscape_5s_dataset)
 
     # Store datasets
-    raw_dataset = raw_dataset.select(range(10))
+    #raw_dataset = raw_dataset.select(range(10))
     raw_dataset.save_to_disk(raw_data_path)
     test_dataset.save_to_disk(test_data_path)
     noise_dataset.save_to_disk(noise_data_path)
 
-    os.makedirs(raw_data_info_path, exist_ok=True)
-    raw_dataset.info.write_to_directory(raw_data_info_path)
+    # Store raw dataset meta data fro dvc tracking
+    raw_data_metadata = {
+        "fingerprint": raw_dataset._fingerprint,
+        "num_rows": len(raw_dataset),
+        "columns": raw_dataset.column_names,
+        "features": str(raw_dataset.features)
+    }
+
+    #os.makedirs(raw_data_metadata_path, exist_ok=True)
+    with open(raw_data_metadata_path, "w") as f:
+        json.dump(raw_data_metadata, f, indent=2)
+
+    # os.makedirs(raw_data_metadata_path, exist_ok=True)
+    # raw_dataset.info.write_to_directory(raw_data_metadata_path)
 
     print("Finished loading datasets!")
 

@@ -3,6 +3,7 @@ from tqdm import tqdm
 from datasets import Dataset, load_from_disk
 from pathlib import Path
 from omegaconf import OmegaConf
+import time
 
 from modules.dsp import detect_event_bounds, stft_mask_bandpass, segment_audio, pad_audio_end, num_samples_to_duration_s, remove_segments_without_events, extract_relevant_bounds, plot_save_mel_spectrogram
 
@@ -151,8 +152,6 @@ def main():
     elif not "detections" in raw_dataset.features['sources'][0].keys():
         raise Exception("Can not segment Datasetx. Nested feature 'detections' does not exist in column 'sources'.")
 
-        raw_dataset = add_sources_column(raw_dataset)
-
     # Define features of segments dataset
     segments_dataset_rows = {
         "audio": [],
@@ -164,6 +163,10 @@ def main():
         "original_birdset_subset": [],
         "original_file": []
         }
+    
+    # Calculate the start time
+    start = time.time()
+    print("Segment the whole dataset with 1 worker.")
 
     # Extract segments from examples
     for example in tqdm(raw_dataset):
@@ -178,6 +181,13 @@ def main():
                 segments_dataset_rows["common_name"].append(row["common_name"])
                 segments_dataset_rows["original_birdset_subset"].append(row["original_birdset_subset"])
                 segments_dataset_rows["original_file"].append(row["original_file"])
+
+    # Calculate the end time and time taken
+    end = time.time()
+    length = end - start
+
+    # Show the results : this can be altered however you like
+    print("Segmentation with 1 worker took ", length, "seconds!")
 
     # Create segments dataset
     segments_dataset = Dataset.from_dict(segments_dataset_rows)

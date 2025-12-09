@@ -6,6 +6,7 @@ from math import ceil
 
 from integrations.bird_mixit.source_separation import separate_batch, init_separation_worker
 from modules.dataset import process_batches_in_parallel, overwrite_dataset
+from modules.utils import monitor_memory
 
 def add_sources_column(dataset):
    # Define the schema for the new column holding the sources data
@@ -30,13 +31,19 @@ def add_sources_column(dataset):
 
 def main():
 
-    print("Start separating audio...")
+    print("Start preparing dataset for separation...")
+
+    # # Start memory monitoring thread
+    # stop_event = threading.Event()
+    # monitor_thread = threading.Thread(target=monitor_memory, args=(5, stop_event))
+    # monitor_thread.daemon = True
+    # monitor_thread.start()
 
     # Load the parameters from the config file
     cfg = OmegaConf.load("params.yaml")
     raw_data_path = cfg.paths.raw_data
     #source_separated_data_path = cfg.paths.source_separated_data
-    source_separation_meta_data_path = cfg.paths.source_separation_meta_data
+    source_separation_meta_data_path = cfg.paths.source_separation_metadata
 
     model_dir = cfg.source_separation.model_dir
     checkpoint = cfg.source_separation.checkpoint
@@ -44,17 +51,44 @@ def main():
     
     # Load raw dataset
     raw_dataset = load_from_disk(raw_data_path)
+    raw_dataset = raw_dataset.select(range(100))
     raw_dataset = raw_dataset.cast_column("audio", Audio(sampling_rate=sampling_rate))
+
+    # Truncate audio arrays to 30s max
+    # Get the sampling rate from the Audio feature
+    MAX_DURATION = 30
+    sr = raw_dataset.features["audio"].sampling_rate
+    max_len = int(sr * MAX_DURATION)
+
+    def truncate_example(example):
+        arr = example["audio"]["array"]
+        example["audio"]["array"] = arr[:max_len]  # drop anything beyond 30s
+        return example
+
+    print("Truncate examples.")
+    raw_dataset = raw_dataset.map(truncate_example)
 
     # Check if column sources exists, else add column
     if  not "sources" in raw_dataset.column_names:
         raw_dataset = add_sources_column(raw_dataset)
         
     # Get processing configuration
-    num_workers = psutil.cpu_count(logical=False) or psutil.cpu_count()
+    def get_num_workers(gb_per_worker=1, cpu_percentage=0.7):
+        num_workers_cpu_max = psutil.cpu_count(logical=False) or psutil.cpu_count()
+        num_workers_cpu = cpu_percentage * num_workers_cpu_max
+
+        memory = psutil.virtual_memory()
+        available_gb = memory.available / (1024 ** 3)
+        num_workers_memory = int(available_gb/gb_per_worker)
+        return min(num_workers_cpu, num_workers_memory) 
+    
+    num_workers = get_num_workers(gb_per_worker=1)
     batch_size = ceil((len(raw_dataset) + 1) / num_workers)
 
+    print("Prepared dataset for Separation.")
+
     # Calculate the start time
+    print("Start separating audio...")
     start = time.time()
 
     # Separate sources
@@ -66,6 +100,10 @@ def main():
         initializer=init_separation_worker,
         initargs=(model_dir, checkpoint)
     )
+
+    # # Stop monitoring memory
+    # stop_event.set()
+    # monitor_thread.join(timeout=1)
 
     # Calculate the end time and time taken
     end = time.time()

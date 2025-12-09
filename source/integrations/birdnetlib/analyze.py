@@ -4,6 +4,7 @@ import numpy as np
 import subprocess
 import re
 import ast
+import gc
 
 import os
 
@@ -114,6 +115,16 @@ def analyze_example(example):
         recording.analyze()
 
         source['detections'] = recording.detections
+        
+        # Clear all references in RecordingBuffer
+        recording.buffer = None
+        recording.ndarray = None
+        recording.chunks = None
+        recording.detection_list = None
+
+        # Clean up after each source
+        del recording
+        del source_array
 
     return example
 
@@ -121,12 +132,12 @@ _analyzer = None
 _birdnetlib_sampling_rate = int(0)
 
 def init_analyzation_worker(birdnet_sampling_rate):
-    "Start initilization of worker."
+    print("Start initilization of worker.")
     global _analyzer
     global _birdnetlib_sampling_rate
     _analyzer = Analyzer()
     _birdnetlib_sampling_rate = birdnet_sampling_rate
-    "Initilization of worker succesful."
+    print("Initilization of worker succesful.")
 
 def analyze_batch(batch):
     print("Worker", os.getpid(), "Start analyzing batch")
@@ -136,6 +147,12 @@ def analyze_batch(batch):
         analyzed_example = analyze_example(example)
         analyzed_examples.append(analyzed_example)
 
+        # Delete analyzed example after appending
+        del analyzed_example
+
+    # Force garbage collection
+    gc.collect()
+
     print("Worker", os.getpid(), "Finished analyzing batch")
-    
+
     return analyzed_examples

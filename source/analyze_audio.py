@@ -17,7 +17,7 @@ def main():
     # birdnetlib_analyzed_data_path = cfg.paths.birdnetlib_analyzed_data
     raw_data_path = cfg.paths.raw_data
     birdnetlib_sampling_rate = cfg.analysis.sampling_rate
-    analysis_meta_data_path = cfg.paths.analysis_meta_data
+    analysis_metadata_path = cfg.paths.analysis_metadata
 
     # Load dataset with separateed sources
     raw_dataset = load_from_disk(raw_data_path)
@@ -28,7 +28,7 @@ def main():
 
     # Store detections
     num_workers = psutil.cpu_count(logical=False) or psutil.cpu_count()
-    batch_size = ceil((len(raw_dataset) + 1) / num_workers)
+    batch_size = 50 #ceil((len(raw_dataset) + 1) / num_workers)
 
     # Calculate the start time
     start = time.time()
@@ -57,7 +57,7 @@ def main():
     print("Finished analyzing audio birdnetlib!")
 
     sources_subset = analyzed_dataset.select_columns(["sources"])
-    sources_subset.to_json(analysis_meta_data_path)
+    sources_subset.to_json(analysis_metadata_path)
 
 if __name__ == '__main__':
   main()

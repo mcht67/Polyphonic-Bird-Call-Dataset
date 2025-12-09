@@ -1,7 +1,42 @@
 from pathlib import Path
 import random
 from functools import wraps
-import subprocess
+import psutil
+import os
+import time
+
+def log_memory():
+    process = psutil.Process(os.getpid())
+    print(f"Memory usage: {process.memory_info().rss / 1024 / 1024:.2f} MB")
+
+def monitor_memory(interval=5, stop_event=None):
+    """Monitor memory usage of main process and all child processes"""
+    main_process = psutil.Process(os.getpid())
+    
+    while not (stop_event and stop_event.is_set()):
+        try:
+            # Get main process memory
+            main_mem = main_process.memory_info().rss / 1024 / 1024  # MB
+            
+            # Get all child processes memory
+            children = main_process.children(recursive=True)
+            children_mem = sum(child.memory_info().rss / 1024 / 1024 for child in children)
+            
+            # Total system memory usage
+            system_mem = psutil.virtual_memory()
+            
+            print(f"\n{'='*60}")
+            print(f"Main process:     {main_mem:>10.2f} MB")
+            print(f"Child processes:  {children_mem:>10.2f} MB ({len(children)} workers)")
+            print(f"Total (program):  {main_mem + children_mem:>10.2f} MB")
+            print(f"System total:     {system_mem.used / 1024 / 1024:>10.2f} MB / {system_mem.total / 1024 / 1024:.2f} MB")
+            print(f"System available: {system_mem.available / 1024 / 1024:>10.2f} MB ({system_mem.percent}% used)")
+            print(f"{'='*60}\n")
+            
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+        
+        time.sleep(interval)
 
 def with_random_state(func):
     """

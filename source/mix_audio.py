@@ -5,6 +5,7 @@ from pathlib import Path
 from omegaconf import OmegaConf
 from datasets import load_from_disk, Sequence, Value, Features, Audio, Dataset
 from librosa import resample
+import time
 
 from modules.dataset import flatten_features, concatenate_datasets, filter_dataset_by_audio_array_length, flatten_raw_examples, balance_dataset_by_species
 from modules.utils import IndexMap
@@ -280,6 +281,10 @@ def main():
 
     balanced_dataset.cast_column("audio", Audio())
 
+    # Calculate the start time
+    start = time.time()
+    print("Mix the whole dataset with 1 worker.")
+
     for i, batch in enumerate(generate_mix_batches(balanced_dataset, noise_dataset,
                                                max_polyphony_degree, 
                                                signal_levels, snr_values, mix_levels,
@@ -296,6 +301,13 @@ def main():
     print("Concatenate batches", flush=True)
     datasets = [load_from_disk(d) for d in temp_dirs]
     full_dataset = concatenate_datasets(datasets)
+
+    # Calculate the end time and time taken
+    end = time.time()
+    length = end - start
+
+    # Show the results : this can be altered however you like
+    print("Mixing with 1 worker took ", length, "seconds!")
 
     # Save final dataset
     full_dataset.save_to_disk(polyphonic_dataset_path)
