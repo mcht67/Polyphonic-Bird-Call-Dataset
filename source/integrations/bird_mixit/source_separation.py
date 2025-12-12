@@ -92,17 +92,17 @@ def separate_example(example, separation_session_data=None):
                    input_node,
                    output_node,
                    audio['array'],
-                   input_sampling_rate=audio['sampling_rate']
+                   input_sampling_rate=int(audio['sampling_rate'])
                    )
     
      # Convert sources efficiently without extra copies
     example['sources'] = [
         {
             "audio": {
-                "array": np.array(source.copy()),
+                "array": source.copy().astype(np.float32),
                 "sampling_rate": source_sr
-            }, 
-            "detections": []
+            }#, 
+            #"detections": [] #[{"common_name": None, "scientific_name": None, "label": None, "confidence": None, "start_time": None, "end_time": None}]
         } 
         for source in sources
     ]

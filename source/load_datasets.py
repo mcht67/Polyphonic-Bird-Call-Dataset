@@ -1,4 +1,4 @@
-from datasets import load_dataset
+from datasets import load_dataset, Audio
 from omegaconf import OmegaConf
 import random
 import json
@@ -31,6 +31,8 @@ def separate_to_noise_and_test_split(soundscape_dataset):
     return noise_dataset, soundscape_dataset_filtered
 
 def main():
+
+    print("this changed")
 
     print("Start loading datasets...")
     

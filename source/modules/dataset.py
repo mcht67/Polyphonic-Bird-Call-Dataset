@@ -152,103 +152,50 @@ def filter_dataset_by_audio_array_length(dataset, min_duration_in_s):
 #     print(f"Concatenating {len(processed_datasets)} batches...")
 #     return concatenate_datasets(processed_datasets)
 
-def process_batches_in_parallel(dataset, process_batch_fn, batch_size=100, 
-                                 num_workers=1, initializer=None, initargs=()):
+# def process_batches_in_parallel(dataset, process_batch_fn, batch_size=100, 
+#                                  num_workers=1, initializer=None, initargs=()):
      
-    if not dataset or len(dataset) == 0:
-        raise ValueError("Dataset can not be empty")
+#     if not dataset or len(dataset) == 0:
+#         raise ValueError("Dataset can not be empty")
     
-    if batch_size < 1:
-        raise ValueError(f"batch_size has to be >= 1, actual: {batch_size}")
+#     if batch_size < 1:
+#         raise ValueError(f"batch_size has to be >= 1, actual: {batch_size}")
     
-    if num_workers < 1:
-        raise ValueError(f"num_workers has to be >= 1, actual: {num_workers}")
+#     if num_workers < 1:
+#         raise ValueError(f"num_workers has to be >= 1, actual: {num_workers}")
 
-    batches = [
-        dataset.select(range(i, min(i+batch_size, len(dataset))))
-        for i in range(0, len(dataset), batch_size)
-    ]
+#     batches = [
+#         dataset.select(range(i, min(i+batch_size, len(dataset))))
+#         for i in range(0, len(dataset), batch_size)
+#     ]
 
-    print("Process", len(batches), "batches with a batch size of", batch_size, "on", num_workers, "workers.")
+#     print("Process", len(batches), "batches with a batch size of", batch_size, "on", num_workers, "workers.")
     
-    # with get_context('spawn').Pool(num_workers, initializer=initializer, 
-    #                                  initargs=initargs) as pool:
-    #     batch_results = pool.map(process_batch_fn, batches)
+#     # with get_context('spawn').Pool(num_workers, initializer=initializer, 
+#     #                                  initargs=initargs) as pool:
+#     #     batch_results = pool.map(process_batch_fn, batches)
 
-    with get_context('spawn').Pool(num_workers, initializer=initializer, 
-                                initargs=initargs) as pool:
-        batch_results = list(tqdm(
-            pool.imap(process_batch_fn, batches),
-            total=len(batches),
-            desc="Processing batches"
-    ))
+#     with get_context('spawn').Pool(num_workers, initializer=initializer, 
+#                                 initargs=initargs) as pool:
+#         batch_results = list(tqdm(
+#             pool.imap(process_batch_fn, batches),
+#             total=len(batches),
+#             desc="Processing batches"
+#     ))
     
-    all_examples = [ex for batch in batch_results for ex in batch]
+#     all_examples = [ex for batch in batch_results for ex in batch]
     
-    return Dataset.from_list(all_examples)
+#     return Dataset.from_list(all_examples)
 
 # Generator function - creates batches lazily
 def batch_generator(dataset, batch_size):
     for i in range(0, len(dataset), batch_size):
         yield dataset.select(range(i, min(i+batch_size, len(dataset))))
 
-# def process_batches_in_parallel(dataset, process_batch_fn, batch_size=10, 
-#                                 num_workers=1, initializer=None, initargs=(),
-#                                 tmp_dir="tmp_sep"):
+def process_batches_in_parallel(dataset, process_batch_fn, features, batch_size=10, 
+                                num_workers=1, initializer=None, initargs=(),
+                                tmp_dir="tmp_sep"):
 
-#     if not dataset or len(dataset) == 0:
-#         raise ValueError("Dataset can not be empty")
-#     if batch_size < 1:
-#         raise ValueError(f"batch_size has to be >= 1, actual: {batch_size}")
-#     if num_workers < 1:
-#         raise ValueError(f"num_workers has to be >= 1, actual: {num_workers}")
-
-#     num_batches = (len(dataset) + batch_size - 1) // batch_size
-#     print("Process", num_batches, "batches with a batch size of", batch_size,
-#           "on", num_workers, "workers.")
-
-#     os.makedirs(tmp_dir, exist_ok=True)
-#     shard_paths = []
-
-#     with get_context('spawn').Pool(
-#         num_workers,
-#         initializer=initializer,
-#         initargs=initargs,
-#         maxtasksperchild=1,   # or higher, e.g. 5–10
-#     ) as pool:
-#         for batch_idx, batch_result in enumerate(tqdm(
-#             pool.imap(process_batch_fn, batch_generator(dataset, batch_size)),
-#             total=num_batches,
-#             desc="Processing batches"
-#         )):
-#             # Create a small Dataset just for this batch
-#             batch_ds = Dataset.from_list(batch_result)
-
-#             # Save this shard to disk
-#             batch_path = os.path.join(tmp_dir, f"batch_{batch_idx}")
-#             batch_ds.save_to_disk(batch_path)
-#             shard_paths.append(batch_path)
-
-#             # Free memory for this batch
-#             del batch_ds, batch_result
-#             gc.collect()
-
-#             print(f"Finished batch {batch_idx}. Saved to {batch_path}")
-#             log_memory()
-
-#     gc.collect()
-
-#     # Option 1: return a concatenated Dataset (will load everything again)
-#     shards = [load_from_disk(p) for p in shard_paths]
-#     full_ds = concatenate_datasets(shards)
-#     return full_ds
-
-#     # Option 2 (alternative): return shard_paths and let caller decide how to reload
-#     # return shard_paths
-
-def process_batches_in_parallel(dataset, process_batch_fn, batch_size=10, 
-                                 num_workers=1, initializer=None, initargs=()):
-    
     if not dataset or len(dataset) == 0:
         raise ValueError("Dataset can not be empty")
     if batch_size < 1:
@@ -257,35 +204,89 @@ def process_batches_in_parallel(dataset, process_batch_fn, batch_size=10,
         raise ValueError(f"num_workers has to be >= 1, actual: {num_workers}")
 
     num_batches = (len(dataset) + batch_size - 1) // batch_size
-    print("Process", num_batches, "batches with a batch size of", batch_size, "on", num_workers, "workers.")
-    
-    all_examples = []
-    
-    with get_context('spawn').Pool(num_workers, initializer=initializer, 
-                                     initargs=initargs) as pool: #,maxtasksperchild=1
-        # Process batches with imap (lazy) instead of map (eager)
-        for batch_result in tqdm(
+    print("Process", num_batches, "batches with a batch size of", batch_size,
+          "on", num_workers, "workers.")
+
+    os.makedirs(tmp_dir, exist_ok=True)
+    shard_paths = []
+
+    with get_context('spawn').Pool(
+        num_workers,
+        initializer=initializer,
+        initargs=initargs,
+        maxtasksperchild=1,   # or higher, e.g. 5–10
+    ) as pool:
+        for batch_idx, batch_result in enumerate(tqdm(
             pool.imap(process_batch_fn, batch_generator(dataset, batch_size)),
             total=num_batches,
             desc="Processing batches"
-        ):
-            # Flatten and append this batch's results
-            all_examples.extend(batch_result)
-            
-            # Clean up batch result immediately
-            del batch_result
-            
-            # Force GC every few batches
-            if len(all_examples) % (batch_size * 5) < batch_size:
-                gc.collect()
+        )):
+            # Create a small Dataset just for this batch
+            batch_ds = Dataset.from_list(batch_result, features=features)
 
-            print("Finished batch processing.")
+            # Save this shard to disk
+            batch_path = os.path.join(tmp_dir, f"batch_{batch_idx}")
+            batch_ds.save_to_disk(batch_path)
+            shard_paths.append(batch_path)
+
+            # Free memory for this batch
+            del batch_ds, batch_result
+            gc.collect()
+
+            print(f"Finished batch {batch_idx}. Saved to {batch_path}")
             log_memory()
-    
-    # Final cleanup
+
     gc.collect()
+
+    # Concatenate Dataset
+    shards = [load_from_disk(p) for p in shard_paths]  
+    full_ds = concatenate_datasets(shards)
+ 
+    # Remove temp dir
+    shutil.rmtree(tmp_dir)
+
+    return full_ds
+
+# def process_batches_in_parallel(dataset, process_batch_fn, batch_size=10, 
+#                                  num_workers=1, initializer=None, initargs=()):
     
-    return Dataset.from_list(all_examples)
+#     if not dataset or len(dataset) == 0:
+#         raise ValueError("Dataset can not be empty")
+#     if batch_size < 1:
+#         raise ValueError(f"batch_size has to be >= 1, actual: {batch_size}")
+#     if num_workers < 1:
+#         raise ValueError(f"num_workers has to be >= 1, actual: {num_workers}")
+
+#     num_batches = (len(dataset) + batch_size - 1) // batch_size
+#     print("Process", num_batches, "batches with a batch size of", batch_size, "on", num_workers, "workers.")
+    
+#     all_examples = []
+    
+#     with get_context('spawn').Pool(num_workers, initializer=initializer, 
+#                                      initargs=initargs) as pool: #,maxtasksperchild=1
+#         # Process batches with imap (lazy) instead of map (eager)
+#         for batch_result in tqdm(
+#             pool.imap(process_batch_fn, batch_generator(dataset, batch_size)),
+#             total=num_batches,
+#             desc="Processing batches"
+#         ):
+#             # Flatten and append this batch's results
+#             all_examples.extend(batch_result)
+            
+#             # Clean up batch result immediately
+#             del batch_result
+            
+#             # Force GC every few batches
+#             if len(all_examples) % (batch_size * 5) < batch_size:
+#                 gc.collect()
+
+#             print("Finished batch processing.")
+#             log_memory()
+    
+#     # Final cleanup
+#     gc.collect()
+    
+#     return Dataset.from_list(all_examples)
 
 def overwrite_dataset(dataset, dataset_path, store_backup=True):
     # Save to temporary location
@@ -304,6 +305,25 @@ def overwrite_dataset(dataset, dataset_path, store_backup=True):
     # Optionally remove backup
     if not store_backup:
         shutil.rmtree(backup_path)
+
+def truncate_example(example, max_duration_s):
+    max_num_samples = int(max_duration_s * example["audio"]["sampling_rate"])
+    example["audio"]["array"] = example["audio"]["array"][:max_num_samples]
+    return example
+
+def truncate_batch(batch, max_duration_s):
+    truncated_arrays = []
+    for audio in batch["audio"]:
+        max_num_samples = int(max_duration_s * audio["sampling_rate"])
+        truncated_arrays.append(audio["array"][:max_num_samples])
+    
+    batch["audio"] = [
+        {"array": arr, "sampling_rate": audio["sampling_rate"], "path": audio.get("path")}
+        for arr, audio in zip(truncated_arrays, batch["audio"])
+    ]
+
+    del truncated_arrays
+    return batch
 
 
 

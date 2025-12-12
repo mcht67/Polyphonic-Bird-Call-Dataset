@@ -8,9 +8,10 @@ paths:
   # balanced_data: data/${dataset.subset}/balanced
   polyphonic_data: data/${dataset.subset}/polyphonic
 
-  raw_data_info: data/${dataset.subset}/stage_results/raw_data_info
-  source_separation_meta_data: data/${dataset.subset}/stage_results/source_separation_meta_data.json
-  analysis_meta_data: data/${dataset.subset}/stage_results/analysis_meta_data.json
+  #raw_data_info: data/${dataset.subset}/stage_results/raw_data_info
+  raw_data_metadata: data/${dataset.subset}/stage_results/raw_data_metadata.json
+  source_separation_metadata: data/${dataset.subset}/stage_results/source_separation_metadata.json
+  analysis_metadata: data/${dataset.subset}/stage_results/analysis_metadata.json
 
 random:
   random_seed: 42
@@ -22,6 +23,9 @@ source_separation:
   model_dir: resources/bird_mixit_model_checkpoints/output_sources4
   checkpoint: resources/bird_mixit_model_checkpoints/output_sources4/model.ckpt-3223090
   sampling_rate: 22050 # bird mixit needs 22050 Hz
+  max_duration_s: 30
+  cpu_percentage: 0.8
+  gb_per_worker: 1
 
 analysis:
   sampling_rate: 48000 # birdnetlib needs 48kHz, internal resampling does not work with RecordingBuffer

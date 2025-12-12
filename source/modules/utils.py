@@ -113,3 +113,12 @@ class IndexMap:
         value = self.indices[self.pos]
         self.pos += 1
         return value
+
+def get_num_workers(gb_per_worker=1, cpu_percentage=0.5):
+    num_workers_cpu_max = psutil.cpu_count(logical=False) or psutil.cpu_count()
+    num_workers_cpu = cpu_percentage * num_workers_cpu_max
+
+    memory = psutil.virtual_memory()
+    available_gb = memory.available / (1024 ** 3)
+    num_workers_memory = int(available_gb/gb_per_worker)
+    return int(min(num_workers_cpu, num_workers_memory))

@@ -28,14 +28,14 @@ def main():
 
     # Store detections
     num_workers = psutil.cpu_count(logical=False) or psutil.cpu_count()
-    batch_size = 50 #ceil((len(raw_dataset) + 1) / num_workers)
+    batch_size = 10 #ceil((len(raw_dataset) + 1) / num_workers)
 
     # Calculate the start time
     start = time.time()
     print("Analyze with", num_workers, "workers and a batch size of", batch_size)
 
     analyzed_dataset = process_batches_in_parallel(
-            raw_dataset, 
+            raw_dataset,
             process_batch_fn=analyze_batch,
             batch_size=batch_size,
             num_workers=num_workers,
