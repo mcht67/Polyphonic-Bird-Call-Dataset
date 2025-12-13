@@ -3,6 +3,7 @@ from omegaconf import OmegaConf
 import time
 from math import ceil
 from datetime import datetime
+import json
 
 from integrations.bird_mixit.source_separation import separate_batch, init_separation_worker
 from modules.dataset import process_batches_in_parallel, overwrite_dataset
@@ -50,7 +51,7 @@ def main():
     
     # Load raw dataset
     raw_dataset = load_from_disk(raw_data_path)
-    #raw_dataset = raw_dataset.select(range(4))
+    #raw_dataset = raw_dataset.select(range(8))
     raw_dataset = raw_dataset.cast_column("audio", Audio(sampling_rate=sampling_rate))
 
     # Remove known bad indices
@@ -105,9 +106,7 @@ def main():
     # # Get the sampling rate from the Audio feature
     print("Start truncating examples....")
     num_workers = get_num_workers(cpu_percentage=0.8, gb_per_worker=1.5)
-    #truncate_fn = partial(truncate_example, max_duration_s=max_duration_s)
-    # raw_dataset.map(truncate_fn, keep_in_memory=False)
-    #raw_dataset = raw_dataset.map(truncate_fn, num_proc=num_workers) #, keep_in_memory=False, batched=True, batch_size=100)
+
     raw_dataset = raw_dataset.map(
         lambda batch: truncate_batch(batch, max_duration_s=max_duration_s),
         batched=True,
@@ -122,11 +121,11 @@ def main():
     # Remove sources column if it exists to remove all old sources and detections
     if  "sources" in raw_dataset.column_names:
         raw_dataset.remove_columns('sources')
-    #raw_dataset = add_sources_column(raw_dataset)  
         
     # Get processing configuration  
     num_workers = get_num_workers(gb_per_worker=2, cpu_percentage=0.8)
-    batch_size = ceil(((len(raw_dataset) + 1) / num_workers)/10)
+    batch_size = 2 # ceil(((len(raw_dataset) + 1) / num_workers)//10)
+    batches_per_shard = 1
 
     print("Prepared dataset for Separation.")
 
@@ -135,18 +134,7 @@ def main():
     start = time.time()
 
     features = raw_dataset.features.copy()
-    # features['sources'] = Sequence({"audio": {'array': Sequence(Value("float32")), 'sampling_rate': Value("int64")}})
     features['sources'] = [{"audio": {'array': Sequence(Value("float32")), 'sampling_rate': Value("int64")}}]
-
-    print(features['sources'])
-
-    #print(features['ebird_code_secondary'])
-    #print(features['sources'])
-    #print(features)
-    #raw_dataset.cast_column("ebird_code_multilabel", Sequence(Value("int32")))
-    #raw_dataset.cast_column('ebird_code_secondary', Sequence(feature=Value(dtype='string', id=None), length=-1, id=None))
-    #print(raw_dataset.features)
-    #raw_dataset.cast(features)
 
     # Separate sources
     separated_dataset = process_batches_in_parallel(
@@ -154,6 +142,7 @@ def main():
         process_batch_fn=separate_batch,
         features=features,
         batch_size=batch_size,
+        batches_per_shard=batches_per_shard,
         num_workers=num_workers,
         initializer=init_separation_worker,
         initargs=(model_dir, checkpoint)
@@ -171,7 +160,6 @@ def main():
 
     # # Store stage results for dvc tracking
     sources_subset = separated_dataset.select_columns(["sources"])
-    # sources_subset.to_json(source_separation_meta_data_path)
 
     # Convert to Python objects
     data = sources_subset.to_dict()
@@ -180,7 +168,6 @@ def main():
     data["datetime"] = datetime.now().isoformat()
 
     # Write JSON with timestamp
-    import json
     with open(source_separation_metadata_path, "w") as f:
         json.dump(data, f, indent=2)
 

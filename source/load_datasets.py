@@ -4,6 +4,8 @@ import random
 import json
 from datetime import datetime
 
+from modules.dataset import overwrite_dataset
+
 def is_no_bird(example):
         return example['ebird_code'] is None and example['ebird_code_multilabel'] == [] and example['ebird_code_secondary'] is None
 
@@ -32,7 +34,7 @@ def separate_to_noise_and_test_split(soundscape_dataset):
 
 def main():
 
-    print("Start loading datasets...")
+    print("Start loading datasets...changed")
     
     # Load the parameters from the config file
     cfg = OmegaConf.load("params.yaml")
@@ -54,7 +56,8 @@ def main():
 
     # Store datasets
     #raw_dataset = raw_dataset.select(range(50))
-    raw_dataset.save_to_disk(raw_data_path)
+    #raw_dataset.save_to_disk(raw_data_path)
+    overwrite_dataset(raw_dataset, raw_data_path, store_backup=False)
     test_dataset.save_to_disk(test_data_path)
     noise_dataset.save_to_disk(noise_data_path)
 
