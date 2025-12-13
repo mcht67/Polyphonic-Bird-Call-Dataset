@@ -92,6 +92,11 @@ def analyze_example(example):
 
     # get all sources
     sources = example['sources']
+    #sources['detections'] = [[] for _ in range(len(sources["audio"]))]
+
+    # # init detections
+    # if sources["detections"] == None:
+    #     sources["detections"] = [[] for _ in range(len(sources["audio"]))]
     
     # analyze all sources with birdnetlib
     for source in sources:
@@ -143,6 +148,7 @@ def analyze_batch(batch):
     print("Worker", os.getpid(), "Start analyzing batch")
     
     analyzed_examples = []
+    batch
     for example in batch:
         analyzed_example = analyze_example(example)
         analyzed_examples.append(analyzed_example)

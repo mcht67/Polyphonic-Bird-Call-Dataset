@@ -2,7 +2,7 @@ from datasets import load_dataset, Audio
 from omegaconf import OmegaConf
 import random
 import json
-import os
+from datetime import datetime
 
 def is_no_bird(example):
         return example['ebird_code'] is None and example['ebird_code_multilabel'] == [] and example['ebird_code_secondary'] is None
@@ -32,8 +32,6 @@ def separate_to_noise_and_test_split(soundscape_dataset):
 
 def main():
 
-    print("this changed")
-
     print("Start loading datasets...")
     
     # Load the parameters from the config file
@@ -47,7 +45,6 @@ def main():
     # Load Xeno Canto data
     xc_subset_name = dataset_subset + '_xc'
     raw_dataset = load_dataset('DBD-research-group/BirdSet', xc_subset_name, split='train', trust_remote_code=True)
-
     # Load soundscape data
     soundscape_subset_name = dataset_subset +'_scape'
     soundscape_5s_dataset = load_dataset('DBD-research-group/BirdSet', soundscape_subset_name, split='test_5s', trust_remote_code=True)
@@ -56,7 +53,7 @@ def main():
     noise_dataset, test_dataset = separate_to_noise_and_test_split(soundscape_5s_dataset)
 
     # Store datasets
-    #raw_dataset = raw_dataset.select(range(10))
+    #raw_dataset = raw_dataset.select(range(50))
     raw_dataset.save_to_disk(raw_data_path)
     test_dataset.save_to_disk(test_data_path)
     noise_dataset.save_to_disk(noise_data_path)
@@ -66,7 +63,8 @@ def main():
         "fingerprint": raw_dataset._fingerprint,
         "num_rows": len(raw_dataset),
         "columns": raw_dataset.column_names,
-        "features": str(raw_dataset.features)
+        "features": str(raw_dataset.features),
+        "datetime": datetime.now().isoformat()
     }
 
     #os.makedirs(raw_data_metadata_path, exist_ok=True)

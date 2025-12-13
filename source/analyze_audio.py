@@ -1,8 +1,8 @@
-from datasets import load_from_disk
+from datasets import load_from_disk, Sequence, Value
 from omegaconf import OmegaConf
 import psutil
 import time
-from math import ceil
+from datetime import datetime
 
 from integrations.birdnetlib.analyze import analyze_batch, init_analyzation_worker
 from modules.dataset import process_batches_in_parallel, overwrite_dataset
@@ -34,11 +34,45 @@ def main():
     start = time.time()
     print("Analyze with", num_workers, "workers and a batch size of", batch_size)
 
+    features = raw_dataset.features.copy()
+    # features['sources'] = Sequence({
+    #                                     "audio": {'array': Sequence(Value("float32")), 'sampling_rate': Value("int64")},#, #Audio(),
+    #                                     "detections": Sequence({
+    #                                         "common_name": Value("string"),
+    #                                         "scientific_name": Value("string"),
+    #                                         "label": Value("string"),
+    #                                         "confidence": Value("float32"),
+    #                                         "start_time": Value("float32"),
+    #                                         "end_time": Value("float32"),
+    #                                     })
+    #                                 })
+   
+
+    features['sources'] =  [{
+                                "audio": {
+                                    "array": Sequence(Value("float32")),
+                                    "sampling_rate": Value("int64"),
+                                },
+                                "detections": [{
+                                    "common_name": Value("string"),
+                                    "scientific_name": Value("string"),
+                                    "label": Value("string"),
+                                    "confidence": Value("float32"),
+                                    "start_time": Value("float32"),
+                                    "end_time": Value("float32"),
+                                }],
+                            }]            
+
+    #print(features['sources'])
+    raw_dataset.cast(features)
+    print(raw_dataset.features)
+
     analyzed_dataset = process_batches_in_parallel(
             raw_dataset,
             process_batch_fn=analyze_batch,
+            features=features,
             batch_size=batch_size,
-            num_workers=num_workers,
+            num_workers=1,
             initializer=init_analyzation_worker,
             initargs=(birdnetlib_sampling_rate,) # has to be tuple
         )
@@ -57,7 +91,18 @@ def main():
     print("Finished analyzing audio birdnetlib!")
 
     sources_subset = analyzed_dataset.select_columns(["sources"])
-    sources_subset.to_json(analysis_metadata_path)
+    #sources_subset.to_json(analysis_metadata_path)
+
+    # Convert to Python objects
+    data = sources_subset.to_dict()
+
+    # Add a global timestamp (ISO 8601)
+    data["datetime"] = datetime.now().isoformat()
+
+    # Write JSON with timestamp
+    import json
+    with open(analysis_metadata_path, "w") as f:
+        json.dump(data, f, indent=2)
 
 if __name__ == '__main__':
   main()

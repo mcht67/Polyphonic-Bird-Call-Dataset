@@ -2,7 +2,7 @@ from datasets import load_from_disk, Audio, Features, Sequence, Value
 from omegaconf import OmegaConf
 import time
 from math import ceil
-from functools import partial
+from datetime import datetime
 
 from integrations.bird_mixit.source_separation import separate_batch, init_separation_worker
 from modules.dataset import process_batches_in_parallel, overwrite_dataset
@@ -38,7 +38,7 @@ def main():
     cfg = OmegaConf.load("params.yaml")
     raw_data_path = cfg.paths.raw_data
     #source_separated_data_path = cfg.paths.source_separated_data
-    source_separation_meta_data_path = cfg.paths.source_separation_metadata
+    source_separation_metadata_path = cfg.paths.source_separation_metadata
 
     model_dir = cfg.source_separation.model_dir
     checkpoint = cfg.source_separation.checkpoint
@@ -50,7 +50,7 @@ def main():
     
     # Load raw dataset
     raw_dataset = load_from_disk(raw_data_path)
-    raw_dataset = raw_dataset.select(range(4))
+    #raw_dataset = raw_dataset.select(range(4))
     raw_dataset = raw_dataset.cast_column("audio", Audio(sampling_rate=sampling_rate))
 
     # Remove known bad indices
@@ -125,8 +125,8 @@ def main():
     #raw_dataset = add_sources_column(raw_dataset)  
         
     # Get processing configuration  
-    num_workers = get_num_workers(gb_per_worker=1, cpu_percentage=0.8)
-    batch_size = ceil(((len(raw_dataset) + 1) / num_workers)/2) #ceil(((len(raw_dataset) + 1) / num_workers)/10)
+    num_workers = get_num_workers(gb_per_worker=2, cpu_percentage=0.8)
+    batch_size = ceil(((len(raw_dataset) + 1) / num_workers)/10)
 
     print("Prepared dataset for Separation.")
 
@@ -135,9 +135,8 @@ def main():
     start = time.time()
 
     features = raw_dataset.features.copy()
-    features['sources'] = Sequence({
-                                        "audio": {'array': Sequence(Value("float32")), 'sampling_rate': Value("int64")}#, #Audio(),
-                                    })
+    # features['sources'] = Sequence({"audio": {'array': Sequence(Value("float32")), 'sampling_rate': Value("int64")}})
+    features['sources'] = [{"audio": {'array': Sequence(Value("float32")), 'sampling_rate': Value("int64")}}]
 
     print(features['sources'])
 
@@ -170,9 +169,20 @@ def main():
     # Save separated dataset
     overwrite_dataset(separated_dataset, raw_data_path, store_backup=False)
 
-    # Store stage results for dvc tracking
+    # # Store stage results for dvc tracking
     sources_subset = separated_dataset.select_columns(["sources"])
-    sources_subset.to_json(source_separation_meta_data_path)
+    # sources_subset.to_json(source_separation_meta_data_path)
+
+    # Convert to Python objects
+    data = sources_subset.to_dict()
+
+    # Add a global timestamp (ISO 8601)
+    data["datetime"] = datetime.now().isoformat()
+
+    # Write JSON with timestamp
+    import json
+    with open(source_separation_metadata_path, "w") as f:
+        json.dump(data, f, indent=2)
 
     print("Finished separating audio!")
 

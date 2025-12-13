@@ -221,10 +221,10 @@ def process_batches_in_parallel(dataset, process_batch_fn, features, batch_size=
             total=num_batches,
             desc="Processing batches"
         )):
+
             # Create a small Dataset just for this batch
             batch_ds = Dataset.from_list(batch_result, features=features)
-
-            # Save this shard to disk
+            
             batch_path = os.path.join(tmp_dir, f"batch_{batch_idx}")
             batch_ds.save_to_disk(batch_path)
             shard_paths.append(batch_path)

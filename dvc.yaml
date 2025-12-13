@@ -11,43 +11,46 @@ stages:
       - paths.raw_data
       - paths.test_data
       - paths.noise_data
+      - paths.raw_data_metadata
     outs:
       - data/${dataset.subset}/test:
           cache: false
       - data/${dataset.subset}/noise:
           cache: false
-      - data/${dataset.subset}/stage_results/raw_data_info
+      - data/${dataset.subset}/stage_results/raw_data_metadata.json
 
   separate_audio:
     cmd: python source/separate_audio.py
     deps:
       - source/separate_audio.py
       #- data/${dataset.subset}/raw
-      - data/${dataset.subset}/stage_results/raw_data_info
+      - data/${dataset.subset}/stage_results/raw_data_metadata.json
       - source/integrations/bird_mixit/source_separation.py
       - source/modules/dataset.py
     params:
       - paths.raw_data
+      - paths.source_separation_metadata
       # - paths.source_separated_data
       - source_separation
     outs:
-      - data/${dataset.subset}/stage_results/source_separation_meta_data.json
+      - data/${dataset.subset}/stage_results/source_separation_metadata.json
     
   analyze_audio:
     cmd: conda run --no-capture-output -n birdnetlib python source/analyze_audio.py
     deps:
       - source/analyze_audio.py
-      - data/${dataset.subset}/stage_results/source_separation_meta_data.json
+      - data/${dataset.subset}/stage_results/source_separation_metadata.json
       - source/integrations/birdnetlib/analyze.py
       - source/modules/dataset.py
     params:
       - dataset.subset
       - paths.raw_data
+      - paths.analysis_metadata
       # - paths.source_separated_data
       # - paths.birdnetlib_analyzed_data
       - analysis
     outs:
-      - data/${dataset.subset}/stage_results/analysis_meta_data.json
+      - data/${dataset.subset}/stage_results/analysis_metadata.json
       - data/${dataset.subset}/raw:
           cache: false
           persist: true
@@ -56,7 +59,7 @@ stages:
     cmd: python source/segment_audio.py
     deps:
       - source/segment_audio.py
-      - data/${dataset.subset}/stage_results/analysis_meta_data.json
+      - data/${dataset.subset}/stage_results/analysis_metadata.json
       # - data/${dataset.subset}/birdnetlib_analyzed
       - source/modules/dsp.py
       - source/integrations/birdnetlib/detections.py

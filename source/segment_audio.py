@@ -72,6 +72,9 @@ def extract_segments_from_example(example, segment_length_in_s, birdset_subset):
         source = sources[source_idx]
         source_array = np.array(source['audio']['array'])
         source_sampling_rate = source['audio']['sampling_rate']
+        # audio = sources['audio'][source_idx]
+        # source_array = audio['array']
+        # source_sampling_rate = audio['sampling_rate']
 
         # Get on-/offsets
         call_bounds = detect_event_bounds(source_array, sr=source_sampling_rate,
@@ -149,6 +152,7 @@ def main():
     # Check if column 'sources' and nested feature 'detections' exist in raw_dataset
     if  not "sources" in raw_dataset.column_names:
         raise Exception("Can not segment Dataset. Dataset does not contain column 'sources'.")
+    #elif not "detections" in raw_dataset.features['sources'].feature.keys():
     elif not "detections" in raw_dataset.features['sources'][0].keys():
         raise Exception("Can not segment Datasetx. Nested feature 'detections' does not exist in column 'sources'.")
 

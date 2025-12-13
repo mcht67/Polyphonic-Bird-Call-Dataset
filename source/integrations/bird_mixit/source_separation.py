@@ -97,9 +97,8 @@ def separate_example(example, separation_session_data=None):
     
      # Convert sources efficiently without extra copies
     example['sources'] = [
-        {
-            "audio": {
-                "array": source.copy().astype(np.float32),
+        {"audio": {
+                "array": source.copy().astype("float32").tolist(),
                 "sampling_rate": source_sr
             }#, 
             #"detections": [] #[{"common_name": None, "scientific_name": None, "label": None, "confidence": None, "start_time": None, "end_time": None}]
