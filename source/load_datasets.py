@@ -34,7 +34,7 @@ def separate_to_noise_and_test_split(soundscape_dataset):
 
 def main():
 
-    print("Start loading datasets...changed")
+    print("Start loading datasets...")
     
     # Load the parameters from the config file
     cfg = OmegaConf.load("params.yaml")
@@ -55,7 +55,7 @@ def main():
     noise_dataset, test_dataset = separate_to_noise_and_test_split(soundscape_5s_dataset)
 
     # Store datasets
-    #raw_dataset = raw_dataset.select(range(50))
+    #raw_dataset = raw_dataset.select(range(10))
     #raw_dataset.save_to_disk(raw_data_path)
     overwrite_dataset(raw_dataset, raw_data_path, store_backup=False)
     test_dataset.save_to_disk(test_data_path)

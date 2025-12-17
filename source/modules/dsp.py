@@ -33,10 +33,12 @@ def detect_event_bounds(audio_array,
     times = librosa.frames_to_time(np.arange(len(rms)), sr=sr, hop_length=hop_length)
 
     # 3. Smooth the energy envelope
+    # TODO: Check division by 5 or 1???
     win = int(smooth_ms / 5) or 1
     smooth_rms = np.convolve(rms, np.ones(win)/win, mode='same')
 
     # 4. Threshold at a fraction of the maximum energy
+    # TODO: maximum or average?
     thresh = threshold_ratio * np.max(smooth_rms)
     mask = smooth_rms > thresh
 

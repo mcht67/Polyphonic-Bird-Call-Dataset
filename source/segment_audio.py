@@ -1,9 +1,10 @@
 import numpy as np
 from tqdm import tqdm
-from datasets import Dataset, load_from_disk
+from datasets import Dataset, load_from_disk, load_dataset
 from pathlib import Path
 from omegaconf import OmegaConf
 import time
+import os
 
 from modules.dsp import detect_event_bounds, stft_mask_bandpass, segment_audio, pad_audio_end, num_samples_to_duration_s, remove_segments_without_events, extract_relevant_bounds, plot_save_mel_spectrogram
 
@@ -147,7 +148,14 @@ def main():
     segment_length_in_s = cfg.segmentation.segment_length_in_s
 
     # Load source separated dataset
-    raw_dataset = load_from_disk(raw_data_path)
+    #raw_dataset = load_from_disk(raw_data_path)
+    raw_dataset = load_dataset(
+        "arrow",
+        data_files=os.path.join(raw_data_path, "data-*.arrow"),
+        streaming=True
+    # split="train"
+    )
+    raw_dataset = raw_dataset['train']
 
     # Check if column 'sources' and nested feature 'detections' exist in raw_dataset
     if  not "sources" in raw_dataset.column_names:

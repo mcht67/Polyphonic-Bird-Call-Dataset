@@ -21,7 +21,7 @@ def flatten_raw_examples(raw_examples):
             flattened[f"raw_files_{key}"].append(val)
     return dict(flattened)
 
-def balance_dataset_by_species(dataset, method="undersample", seed=42, max_per_file=None):
+def balance_dataset_by_species(dataset, method="undersample", seed=42, max_per_file=None, min_samples_per_species=None):
     """
     Balances a Hugging Face dataset so all 'scientific_name' classes have equal representation.
 
@@ -54,10 +54,22 @@ def balance_dataset_by_species(dataset, method="undersample", seed=42, max_per_f
     species_to_indices = {}
     for idx, name in enumerate(dataset['scientific_name']):
         species_to_indices.setdefault(name, []).append(idx)
-    
-    # Determine target count
+
+     # Remove species with unsufficient amount of samples if min_samples_per_species is set
+    species_removed = {}
+    if min_samples_per_species:
+        for key, values in species_to_indices.items():
+            if len(values) < min_samples_per_species:
+                species_removed[key] = species_to_indices.pop(key)
+
+        # species_removed = {key: values for key, values in species_to_indices.items() if len(values) < min_samples_per_species}
+        # species_to_indices = {key: values for key, values in species_to_indices.items() if len(values) >= min_samples_per_species}
+        
+
+    # Get count
     counts = [len(indices) for indices in species_to_indices.values()]
-    
+
+    # Determine target count
     if method == "undersample":
         target_count = min(counts)
     elif method in ["oversample", "controlled_oversample"]:
@@ -99,7 +111,7 @@ def balance_dataset_by_species(dataset, method="undersample", seed=42, max_per_f
         balanced_indices.extend(selected)
 
     random.shuffle(balanced_indices)
-    return dataset.select(balanced_indices)
+    return dataset.select(balanced_indices), species_removed
 
 def flatten_features(prefix: str, features: Features) -> Features:
     flat = {}
@@ -195,7 +207,7 @@ def batch_generator(dataset, batch_size):
 
 def process_batches_in_parallel(dataset, process_batch_fn, features, batch_size=10, 
                                 num_workers=1, initializer=None, initargs=(),
-                                temp_dir="tmp_sep",
+                                temp_dir="tmp_process",
                                 batches_per_shard=10):  # Adjust based on memory
     
     if not dataset or len(dataset) == 0:
@@ -298,16 +310,17 @@ def process_batches_in_parallel(dataset, process_batch_fn, features, batch_size=
     print("Creating dataset metadata...")
     
     # Load dataset lazily (doesn't load all data into memory!)
-    final_dataset = load_dataset(
-        "arrow",
-        data_files=os.path.join(temp_dir, "data-*.arrow"),
-        split="train"
-    )
+    # final_dataset = load_dataset(
+    #     "arrow",
+    #     data_files=os.path.join(temp_dir, "data-*.arrow"),
+    #     streaming=True
+    #    # split="train"
+    # )
     
-    print(f"Dataset with {len(final_dataset)} examples saved to {temp_dir}")
-    print(f"Arrow files: {total_shards} shards")
+    print(f"Dataset with examples saved to {temp_dir}")
+    #print(f"Arrow files: {total_shards} shards")
     
-    return final_dataset
+    return temp_dir
 
 # def process_batches_in_parallel(dataset, process_batch_fn, features, batch_size=10, 
 #                                 num_workers=1, initializer=None, initargs=(),
@@ -430,6 +443,7 @@ def overwrite_dataset(dataset, dataset_path, store_backup=True):
 
     # Move old data to backup
     backup_path = dataset_path + "_backup"
+    os.makedirs(backup_path, exist_ok=True)
     if os.path.exists(dataset_path):
         shutil.move(dataset_path, backup_path)
 
@@ -439,6 +453,26 @@ def overwrite_dataset(dataset, dataset_path, store_backup=True):
     # Optionally remove backup
     if not store_backup:
         shutil.rmtree(backup_path)
+
+def move_dataset(arrow_dir, dataset_path, store_backup=False):
+            
+    # Backup if needed
+    if store_backup and os.path.exists(dataset_path):
+        backup_path = dataset_path + "_backup"
+        print(f"Creating backup at {backup_path}")
+        shutil.copytree(dataset_path, backup_path, dirs_exist_ok=True)
+    
+    # Remove old dataset directory
+    if os.path.exists(dataset_path):
+        print(f"Removing old dataset at {dataset_path}")
+        shutil.rmtree(dataset_path)
+    
+    # Move the arrow files directory to the target location
+    print(f"Moving arrow files from {arrow_dir} to {dataset_path}")
+    shutil.move(arrow_dir, dataset_path)
+    
+    print(f"Dataset successfully moved to {dataset_path}")
+    return
 
 def truncate_example(example, max_duration_s):
     max_num_samples = int(max_duration_s * example["audio"]["sampling_rate"])

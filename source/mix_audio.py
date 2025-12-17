@@ -6,6 +6,8 @@ from omegaconf import OmegaConf
 from datasets import load_from_disk, Sequence, Value, Features, Audio, Dataset
 from librosa import resample
 import time
+from datetime import datetime
+import json
 
 from modules.dataset import flatten_features, concatenate_datasets, filter_dataset_by_audio_array_length, flatten_raw_examples, balance_dataset_by_species
 from modules.utils import IndexMap
@@ -221,6 +223,7 @@ def main():
     segmented_data_path =  cfg.paths.segmented_data
     noise_data_path = cfg.paths.noise_data
     polyphonic_dataset_path = cfg.paths.polyphonic_data
+    polyphonic_metadata_path = cfg.path.poyphonic_metadata
 
     method = cfg.balance_dataset.method
     max_per_file = cfg.balance_dataset.max_per_file
@@ -237,7 +240,7 @@ def main():
     segmented_dataset = load_from_disk(segmented_data_path)
 
     # Balance dataset
-    balanced_dataset = balance_dataset_by_species(segmented_dataset, method, seed=random_seed, max_per_file=max_per_file)
+    balanced_dataset, species_removed = balance_dataset_by_species(segmented_dataset, method, seed=random_seed, max_per_file=max_per_file, min_samples_per_species=50)
 
     # # Load balanced dataset
     # balanced_dataset = load_from_disk(balanced_data_path)
@@ -312,6 +315,19 @@ def main():
     # Save final dataset
     full_dataset.save_to_disk(polyphonic_dataset_path)
     print(f'Saved mixed dataset to {polyphonic_dataset_path}', flush=True)
+
+     # Store stage results for dvc tracking
+    data = {
+        "datetime": datetime.now().isoformat(),
+        "num_examples": len(full_dataset),
+        "processing_time_seconds": length,
+        "dataset_path": polyphonic_dataset_path,
+        "features": list(mix_features.keys()),
+        "species removed": species_removed
+    }
+
+    with open(polyphonic_metadata_path, "w") as f:
+        json.dump(data, f, indent=2)
 
     # Remove tmp files
     for d in temp_dirs:

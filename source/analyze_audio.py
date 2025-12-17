@@ -1,11 +1,14 @@
-from datasets import load_from_disk, Sequence, Value
+from datasets import load_from_disk, Sequence, Value, load_dataset
 from omegaconf import OmegaConf
 import psutil
 import time
 from datetime import datetime
+import os
+import json
 
 from integrations.birdnetlib.analyze import analyze_batch, init_analyzation_worker
-from modules.dataset import process_batches_in_parallel, overwrite_dataset
+from modules.dataset import process_batches_in_parallel, overwrite_dataset, move_dataset
+from modules.utils import get_num_workers
 
 def main():
 
@@ -20,15 +23,24 @@ def main():
     analysis_metadata_path = cfg.paths.analysis_metadata
 
     # Load dataset with separateed sources
-    raw_dataset = load_from_disk(raw_data_path)
+    #raw_dataset = load_from_disk(raw_data_path)
+    raw_dataset = load_dataset(
+        "arrow",
+        data_files=os.path.join(raw_data_path, "data-*.arrow"),
+        #streaming=True
+       split="train"
+    )
 
     # Check if column sources exists, else raise error
     if not "sources" in raw_dataset.column_names:
        raise Exception("Can not analyze 'sources'. Dataset does not contain column 'sources'.")
 
     # Store detections
-    num_workers = psutil.cpu_count(logical=False) or psutil.cpu_count()
-    batch_size = 10 #ceil((len(raw_dataset) + 1) / num_workers)
+    # num_workers = psutil.cpu_count(logical=False) or psutil.cpu_count()
+    # batch_size = 10 #ceil((len(raw_dataset) + 1) / num_workers)
+    num_workers = get_num_workers(gb_per_worker=2, cpu_percentage=0.8)
+    batch_size = 50 # ceil(((len(raw_dataset) + 1) / num_workers)//10)
+    batches_per_shard = 1
 
     # Calculate the start time
     start = time.time()
@@ -64,15 +76,18 @@ def main():
                             }]            
 
     #print(features['sources'])
-    raw_dataset.cast(features)
-    print(raw_dataset.features)
+    # raw_dataset.cast(features)
+    # print(raw_dataset.features)
 
-    analyzed_dataset = process_batches_in_parallel(
+    # analyzed_dataset
+    arrow_dir = process_batches_in_parallel(
             raw_dataset,
             process_batch_fn=analyze_batch,
             features=features,
             batch_size=batch_size,
-            num_workers=1,
+            batches_per_shard=1,
+            temp_dir="temp_analyze",
+            num_workers=num_workers,
             initializer=init_analyzation_worker,
             initargs=(birdnetlib_sampling_rate,) # has to be tuple
         )
@@ -81,28 +96,44 @@ def main():
     end = time.time()
     length = end - start
 
-    # Show the results : this can be altered however you like
-    print("Analysis with", num_workers, "worker took", length, "seconds!")
-    
-    # Save analyzed dataset
-    #analyzed_dataset.save_to_disk(birdnetlib_analyzed_data_path)
-    overwrite_dataset(analyzed_dataset, raw_data_path, store_backup=False)
-
     print("Finished analyzing audio birdnetlib!")
 
-    sources_subset = analyzed_dataset.select_columns(["sources"])
+    # Show the results : this can be altered however you like
+    print("Analysis with", num_workers, "worker took", length, "seconds!")
+
+    # # Store stage results for dvc tracking
+    data = {
+        "datetime": datetime.now().isoformat(),
+        #"num_examples": len(separated_dataset),
+        #"num_shards": int(len(separated_dataset) / (batch_size * batches_per_shard)),  # From your function
+        "batch_size": batch_size,
+        "batches_per_shard": batches_per_shard,
+        "processing_time_seconds": length,
+        "dataset_path": raw_data_path,
+        "features": list(features.keys()),
+    }
+
+    with open(analysis_metadata_path, "w") as f:
+        json.dump(data, f, indent=2)
+
+    #sources_subset = analyzed_dataset.select_columns(["sources"])
     #sources_subset.to_json(analysis_metadata_path)
 
     # Convert to Python objects
-    data = sources_subset.to_dict()
+    #data = sources_subset.to_dict()
 
     # Add a global timestamp (ISO 8601)
-    data["datetime"] = datetime.now().isoformat()
+    #data["datetime"] = datetime.now().isoformat()
 
-    # Write JSON with timestamp
-    import json
-    with open(analysis_metadata_path, "w") as f:
-        json.dump(data, f, indent=2)
+    # # Write JSON with timestamp
+    # import json
+    # with open(analysis_metadata_path, "w") as f:
+    #     json.dump(data, f, indent=2)
+
+    # Save analyzed dataset
+    #analyzed_dataset.save_to_disk(birdnetlib_analyzed_data_path)
+    #overwrite_dataset(analyzed_dataset, raw_data_path, store_backup=False)
+    move_dataset(arrow_dir, raw_data_path, store_backup=False)
 
 if __name__ == '__main__':
   main()
