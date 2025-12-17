@@ -1,13 +1,13 @@
 from datasets import load_from_disk, Sequence, Value, load_dataset
 from omegaconf import OmegaConf
-import psutil
 import time
 from datetime import datetime
 import os
 import json
+import shutil
 
 from integrations.birdnetlib.analyze import analyze_batch, init_analyzation_worker
-from modules.dataset import process_batches_in_parallel, overwrite_dataset, move_dataset
+from modules.dataset import process_batches_in_parallel, overwrite_dataset, move_dataset, process_batches_in_parallel_iter
 from modules.utils import get_num_workers
 
 def main():
@@ -27,12 +27,18 @@ def main():
     raw_dataset = load_dataset(
         "arrow",
         data_files=os.path.join(raw_data_path, "data-*.arrow"),
-        #streaming=True
+        #streaming=True,
+        cache_dir="hf_cache",
        split="train"
-    )
+    ) # This copies the data into cache -> use DatasetIterable instead (Streming=True) or remove cache later
+
+    #raw_dataset = raw_dataset.take(10) #
+    raw_dataset = raw_dataset.select(range(10))
+    features = raw_dataset.features
 
     # Check if column sources exists, else raise error
     if not "sources" in raw_dataset.column_names:
+    #if not "sources" in features.keys():
        raise Exception("Can not analyze 'sources'. Dataset does not contain column 'sources'.")
 
     # Store detections
@@ -79,6 +85,10 @@ def main():
     # raw_dataset.cast(features)
     # print(raw_dataset.features)
 
+    num_batches = (len(raw_dataset) + batch_size - 1) // batch_size
+    print("Process", num_batches, "batches with a batch size of", batch_size,
+          "on", num_workers, "workers.")
+
     # analyzed_dataset
     arrow_dir = process_batches_in_parallel(
             raw_dataset,
@@ -86,6 +96,7 @@ def main():
             features=features,
             batch_size=batch_size,
             batches_per_shard=1,
+            num_batches=num_batches,
             temp_dir="temp_analyze",
             num_workers=num_workers,
             initializer=init_analyzation_worker,
@@ -97,6 +108,8 @@ def main():
     length = end - start
 
     print("Finished analyzing audio birdnetlib!")
+
+    shutil.rmtree("hf_cache")
 
     # Show the results : this can be altered however you like
     print("Analysis with", num_workers, "worker took", length, "seconds!")
@@ -116,24 +129,8 @@ def main():
     with open(analysis_metadata_path, "w") as f:
         json.dump(data, f, indent=2)
 
-    #sources_subset = analyzed_dataset.select_columns(["sources"])
-    #sources_subset.to_json(analysis_metadata_path)
-
-    # Convert to Python objects
-    #data = sources_subset.to_dict()
-
-    # Add a global timestamp (ISO 8601)
-    #data["datetime"] = datetime.now().isoformat()
-
-    # # Write JSON with timestamp
-    # import json
-    # with open(analysis_metadata_path, "w") as f:
-    #     json.dump(data, f, indent=2)
-
     # Save analyzed dataset
-    #analyzed_dataset.save_to_disk(birdnetlib_analyzed_data_path)
-    #overwrite_dataset(analyzed_dataset, raw_data_path, store_backup=False)
-    move_dataset(arrow_dir, raw_data_path, store_backup=False)
+    #move_dataset(arrow_dir, raw_data_path, store_backup=False)
 
 if __name__ == '__main__':
   main()
