@@ -1,12 +1,11 @@
-from datasets import load_from_disk, Audio, Features, Sequence, Value
+from datasets import load_from_disk, Audio, Features, Sequence, Value, disable_caching
 from omegaconf import OmegaConf
 import time
-from math import ceil
 from datetime import datetime
 import json
 
 from integrations.bird_mixit.source_separation import separate_batch, init_separation_worker
-from modules.dataset import process_batches_in_parallel, overwrite_dataset, move_dataset
+from modules.dataset import process_batches_in_parallel, move_dataset
 from modules.utils import get_num_workers
 from modules.dataset import truncate_batch
 
@@ -50,7 +49,7 @@ def main():
     gb_per_worker = cfg.source_separation.gb_per_worker
     
     # Load raw dataset
-    raw_dataset = load_from_disk(raw_data_path)
+    raw_dataset = load_from_disk(raw_data_path) # This does not cache the data, but loads directly from disk
     #raw_dataset = raw_dataset.select(range(8))
     raw_dataset = raw_dataset.cast_column("audio", Audio(sampling_rate=sampling_rate))
 
@@ -136,6 +135,10 @@ def main():
     features = raw_dataset.features.copy()
     features['sources'] = [{"audio": {'array': Sequence(Value("float32")), 'sampling_rate': Value("int64")}}]
 
+    num_batches = (len(raw_dataset) + batch_size - 1) // batch_size
+    print("Process", num_batches, "batches with a batch size of", batch_size,
+          "on", num_workers, "workers.")
+
     # Separate sources
     temp_dir = process_batches_in_parallel(
         raw_dataset,
@@ -144,6 +147,7 @@ def main():
         temp_dir="temp_sep",
         batch_size=batch_size,
         batches_per_shard=batches_per_shard,
+        num_batches=num_batches,
         num_workers=num_workers,
         initializer=init_separation_worker,
         initargs=(model_dir, checkpoint)

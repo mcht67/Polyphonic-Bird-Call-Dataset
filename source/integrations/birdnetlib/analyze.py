@@ -148,7 +148,6 @@ def analyze_batch(batch):
     print("Worker", os.getpid(), "Start analyzing batch")
     
     analyzed_examples = []
-    batch
     for example in batch:
         analyzed_example = analyze_example(example)
         analyzed_examples.append(analyzed_example)
