@@ -1,12 +1,16 @@
 import numpy as np
 from tqdm import tqdm
-from datasets import Dataset, load_from_disk, load_dataset
+from datasets import Dataset, load_from_disk, load_dataset, Sequence, Value, Features
 from pathlib import Path
 from omegaconf import OmegaConf
 import time
 import os
+import shutil
+import gc
 
-from modules.dsp import detect_event_bounds, stft_mask_bandpass, segment_audio, pad_audio_end, num_samples_to_duration_s, remove_segments_without_events, extract_relevant_bounds, plot_save_mel_spectrogram
+from modules.dsp import detect_event_bounds, stft_mask_bandpass, segment_audio, pad_audio_end, num_samples_to_duration_s, remove_segments_without_events, extract_relevant_bounds
+from modules.utils import get_num_workers
+from modules.dataset import process_batches_in_parallel, move_dataset
 
 from integrations.birdnetlib.detections import check_dominant_species, only_target_bird_detected
 from integrations.birdset.utils import validate_species_tag_multi, birdset_code_to_ebird_taxonomy
@@ -134,6 +138,33 @@ def extract_segments_from_example(example, segment_length_in_s, birdset_subset):
 
     return segmented_example
 
+def extract_segments_from_batch(batch):
+    print("Worker", os.getpid(), "Start segmenting batch")
+    
+    all_segments = []
+    for example in batch:
+        segments = extract_segments_from_example(example, _segment_length_in_s, _birdset_subset)
+        if segments:
+            all_segments.append(segments)
+
+        # Delete segments
+        del segments
+
+    # Force garbage collection
+    gc.collect()
+
+    print("Worker", os.getpid(), "Finished segmenting batch")
+
+    return all_segments
+
+def init_segment_worker(segment_length_in_s, birdset_subset):
+    print("Start initilization of worker.")
+    global _segment_length_in_s
+    global _birdset_subset
+    _segment_length_in_s = segment_length_in_s
+    _birdset_subset = birdset_subset
+    print("Initilization of worker succesful.")
+
 def main():
 
     print("Start segmenting audio...")
@@ -152,60 +183,138 @@ def main():
     raw_dataset = load_dataset(
         "arrow",
         data_files=os.path.join(raw_data_path, "data-*.arrow"),
-        streaming=True
-    # split="train"
+        #streaming=True,
+        split="train",
+        cache_dir="hf_cache"
     )
-    raw_dataset = raw_dataset['train']
+    #raw_dataset = raw_dataset['train']
 
     # Check if column 'sources' and nested feature 'detections' exist in raw_dataset
     if  not "sources" in raw_dataset.column_names:
         raise Exception("Can not segment Dataset. Dataset does not contain column 'sources'.")
     #elif not "detections" in raw_dataset.features['sources'].feature.keys():
     elif not "detections" in raw_dataset.features['sources'][0].keys():
-        raise Exception("Can not segment Datasetx. Nested feature 'detections' does not exist in column 'sources'.")
+        raise Exception("Can not segment Dataset. Nested feature 'detections' does not exist in column 'sources'.")
 
-    # Define features of segments dataset
-    segments_dataset_rows = {
-        "audio": [],
-        "time_freq_bounds": [],
-        "birdset_code": [],
-        "ebird_code": [],
-        "scientific_name": [],
-        "common_name": [],
-        "original_birdset_subset": [],
-        "original_file": []
-        }
+    # # Define features of segments dataset
+    # segments_dataset_rows = {
+    #     "audio": [],
+    #     "time_freq_bounds": [],
+    #     "birdset_code": [],
+    #     "ebird_code": [],
+    #     "scientific_name": [],
+    #     "common_name": [],
+    #     "original_birdset_subset": [],
+    #     "original_file": []
+    #     }
     
     # Calculate the start time
     start = time.time()
-    print("Segment the whole dataset with 1 worker.")
 
-    # Extract segments from examples
-    for example in tqdm(raw_dataset):
-        segments = extract_segments_from_example(example, segment_length_in_s, birdset_subset=birdset_subset)
-        if segments:
-            for row in segments:  # each row is a dict with a single audio dict
-                segments_dataset_rows["audio"].append(row["audio"])
-                segments_dataset_rows["time_freq_bounds"].append(row["time_freq_bounds"])
-                segments_dataset_rows["ebird_code"].append(row["ebird_code"])
-                segments_dataset_rows["birdset_code"].append(row["birdset_code"])
-                segments_dataset_rows["scientific_name"].append(row["scientific_name"])
-                segments_dataset_rows["common_name"].append(row["common_name"])
-                segments_dataset_rows["original_birdset_subset"].append(row["original_birdset_subset"])
-                segments_dataset_rows["original_file"].append(row["original_file"])
+    # def process_shard(shard_id, num_shards):
+    # """Each process gets its own shard"""
+    # ds = load_dataset(
+    #     "arrow",
+    #     data_files=os.path.join('../data/HSN/raw', "data-*.arrow"),
+    #     split="train",
+    #     streaming=True
+    # )
+    
+    # # Each worker processes only its shard
+    # ds_shard = ds.shard(num_shards=num_shards, index=shard_id)
+    
+    # results = []
+    # for example in ds_shard:
+    #     result = your_processing_function(example)
+    #     results.append(result)
+    
+    # return results
+
+    # # Run across multiple processes
+    # num_processes = 4
+    # with Pool(num_processes) as pool:
+    #     all_results = pool.starmap(
+    #         process_shard,
+    #         [(i, num_processes) for i in range(num_processes)]
+    #     )
+
+    # # Extract segments from shard
+    # def extract_segments_from_shard(shard, segment_length_in_s, birdset_subset):
+    #     segments = []
+    #     for example in tqdm(shard):
+    #         if segments:
+    #             segments.append(extract_segments_from_example(example, segment_length_in_s, birdset_subset))
+    #     return segments
+
+    # Define features of segments dataset
+
+    features = Features({"audio": {
+                                    "array": Sequence(Value("float32")),
+                                    "sampling_rate": Value("int64"),
+                                },
+                        "time_freq_bounds": Sequence(Sequence(Value("float32"))),
+                        "birdset_code": Value("int64"),
+                        "ebird_code": Value("string"),
+                        "scientific_name": Value("string"),
+                        "common_name": Value("string"),
+                        "original_birdset_subset": Value("string"),
+                        "original_file": Value("string")
+                        })
+
+    # Get multiprocessing configuration
+    num_workers = get_num_workers(gb_per_worker=1, cpu_percentage=0.8)
+    batch_size = 200 # ceil(((len(raw_dataset) + 1) / num_workers)//10)
+    batches_per_shard = 1
+    num_batches = (len(raw_dataset) + batch_size - 1) // batch_size
+    print("Process", num_batches, "batches with a batch size of", batch_size,
+          "on", num_workers, "workers.")
+
+
+    arrow_dir = process_batches_in_parallel(
+        raw_dataset,
+        process_batch_fn=extract_segments_from_batch,
+        features=features,
+        batch_size=batch_size,
+        num_batches=num_batches,
+        num_workers=num_workers,
+        temp_dir="tmp_segment",
+        batches_per_shard=batches_per_shard,
+        initializer=init_segment_worker,
+        initargs=(segment_length_in_s, birdset_subset)
+    )
+
+    # # Extract segments from examples
+    # for example in tqdm(raw_dataset):
+    #     segments = extract_segments_from_example(example, segment_length_in_s, birdset_subset=birdset_subset)
+    #     if segments:
+    #         for row in segments:  # each row is a dict with a single audio dict
+    #             segments_dataset_rows["audio"].append(row["audio"])
+    #             segments_dataset_rows["time_freq_bounds"].append(row["time_freq_bounds"])
+    #             segments_dataset_rows["ebird_code"].append(row["ebird_code"])
+    #             segments_dataset_rows["birdset_code"].append(row["birdset_code"])
+    #             segments_dataset_rows["scientific_name"].append(row["scientific_name"])
+    #             segments_dataset_rows["common_name"].append(row["common_name"])
+    #             segments_dataset_rows["original_birdset_subset"].append(row["original_birdset_subset"])
+    #             segments_dataset_rows["original_file"].append(row["original_file"])
+
+
 
     # Calculate the end time and time taken
     end = time.time()
     length = end - start
 
     # Show the results : this can be altered however you like
-    print("Segmentation with 1 worker took ", length, "seconds!")
+    print("Segmentation with", num_workers, "workers and", num_batches, "batches with a batch size of", batch_size,
+            "took", length, "seconds!")
 
     # Create segments dataset
-    segments_dataset = Dataset.from_dict(segments_dataset_rows)
+    #segments_dataset = Dataset.from_dict(segments_dataset_rows)
 
     # Store segments dataset
-    segments_dataset.save_to_disk(segmented_data_path)
+    #segments_dataset.save_to_disk(segmented_data_path)
+    #move_dataset(arrow_dir, segmented_data_path, store_backup=False)
+
+    shutil.rmtree("hf_cache")
 
     print("Finished segementing audio!")
     

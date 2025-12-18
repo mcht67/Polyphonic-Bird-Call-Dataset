@@ -130,7 +130,7 @@ def main():
         json.dump(data, f, indent=2)
 
     # Save analyzed dataset
-    #move_dataset(arrow_dir, raw_data_path, store_backup=False)
+    move_dataset(arrow_dir, raw_data_path, store_backup=False)
 
 if __name__ == '__main__':
   main()
