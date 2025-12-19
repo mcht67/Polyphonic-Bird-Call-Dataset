@@ -3,6 +3,7 @@ from omegaconf import OmegaConf
 import random
 import json
 from datetime import datetime
+import os
 
 from modules.dataset import overwrite_dataset
 
@@ -11,19 +12,19 @@ def is_no_bird(example):
 
 def separate_to_noise_and_test_split(soundscape_dataset):
 
-     # Step 1: Create a boolean mask for "no bird" examples
+     # Create a boolean mask for "no bird" examples
     no_bird_mask = [is_no_bird(ex) for ex in soundscape_dataset]
 
-    # Step 2: Get indices of "no bird" examples
+    # Get indices of "no bird" examples
     no_bird_indices = [i for i, flag in enumerate(no_bird_mask) if flag]
 
-    # Step 3: Randomly select half of those 
+    # Randomly select half of the "no bird" indices
     n = len(no_bird_indices)
     selected_no_bird_indices = set(random.sample(no_bird_indices, n // 2))
 
-    # Step 4: Split dataset
+    # Split dataset
     # - noise_dataset: subset with selected "no bird" examples
-    # - soundscape_dataset_filtered: dataset with those removed
+    # - soundscape_dataset_filtered: dataset with selected "no bird" examples removed
     noise_dataset = soundscape_dataset.select(list(selected_no_bird_indices))
     soundscape_dataset_filtered = soundscape_dataset.filter(
         lambda _, idx: idx not in selected_no_bird_indices,
@@ -56,7 +57,6 @@ def main():
 
     # Store datasets
     #raw_dataset = raw_dataset.select(range(10))
-    #raw_dataset.save_to_disk(raw_data_path)
     overwrite_dataset(raw_dataset, raw_data_path, store_backup=False)
     test_dataset.save_to_disk(test_data_path)
     noise_dataset.save_to_disk(noise_data_path)
@@ -70,12 +70,9 @@ def main():
         "datetime": datetime.now().isoformat()
     }
 
-    #os.makedirs(raw_data_metadata_path, exist_ok=True)
+    os.makedirs(raw_data_metadata_path, exist_ok=True)
     with open(raw_data_metadata_path, "w") as f:
         json.dump(raw_data_metadata, f, indent=2)
-
-    # os.makedirs(raw_data_metadata_path, exist_ok=True)
-    # raw_dataset.info.write_to_directory(raw_data_metadata_path)
 
     print("Finished loading datasets!")
 

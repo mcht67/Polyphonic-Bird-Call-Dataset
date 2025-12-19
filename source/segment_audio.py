@@ -77,9 +77,6 @@ def extract_segments_from_example(example, segment_length_in_s, birdset_subset):
         source = sources[source_idx]
         source_array = np.array(source['audio']['array'])
         source_sampling_rate = source['audio']['sampling_rate']
-        # audio = sources['audio'][source_idx]
-        # source_array = audio['array']
-        # source_sampling_rate = audio['sampling_rate']
 
         # Get on-/offsets
         call_bounds = detect_event_bounds(source_array, sr=source_sampling_rate,
@@ -171,23 +168,13 @@ def main():
 
     # Load the parameters from the config file
     cfg = OmegaConf.load("params.yaml")
-    # birdnetlib_analyzed_data_path = cfg.paths.birdnetlib_analyzed_data
     raw_data_path = cfg.paths.raw_data
-    segmented_data_path = cfg.paths.segmented_data
 
     birdset_subset = cfg.dataset.subset
     segment_length_in_s = cfg.segmentation.segment_length_in_s
 
     # Load source separated dataset
-    #raw_dataset = load_from_disk(raw_data_path) # This should work as long as dataset_info.json and state.json exist
-    raw_dataset = load_dataset(
-        "arrow",
-        data_files=os.path.join(raw_data_path, "data-*.arrow"),
-        #streaming=True,
-        split="train",
-        cache_dir="hf_cache"
-    )
-    #raw_dataset = raw_dataset['train']
+    raw_dataset = load_from_disk(raw_data_path)
 
     # Check if column 'sources' and nested feature 'detections' exist in raw_dataset
     if  not "sources" in raw_dataset.column_names:
@@ -195,60 +182,12 @@ def main():
     #elif not "detections" in raw_dataset.features['sources'].feature.keys():
     elif not "detections" in raw_dataset.features['sources'][0].keys():
         raise Exception("Can not segment Dataset. Nested feature 'detections' does not exist in column 'sources'.")
-
-    # # Define features of segments dataset
-    # segments_dataset_rows = {
-    #     "audio": [],
-    #     "time_freq_bounds": [],
-    #     "birdset_code": [],
-    #     "ebird_code": [],
-    #     "scientific_name": [],
-    #     "common_name": [],
-    #     "original_birdset_subset": [],
-    #     "original_file": []
-    #     }
     
     # Calculate the start time
     start = time.time()
 
-    # def process_shard(shard_id, num_shards):
-    # """Each process gets its own shard"""
-    # ds = load_dataset(
-    #     "arrow",
-    #     data_files=os.path.join('../data/HSN/raw', "data-*.arrow"),
-    #     split="train",
-    #     streaming=True
-    # )
-    
-    # # Each worker processes only its shard
-    # ds_shard = ds.shard(num_shards=num_shards, index=shard_id)
-    
-    # results = []
-    # for example in ds_shard:
-    #     result = your_processing_function(example)
-    #     results.append(result)
-    
-    # return results
-
-    # # Run across multiple processes
-    # num_processes = 4
-    # with Pool(num_processes) as pool:
-    #     all_results = pool.starmap(
-    #         process_shard,
-    #         [(i, num_processes) for i in range(num_processes)]
-    #     )
-
-    # # Extract segments from shard
-    # def extract_segments_from_shard(shard, segment_length_in_s, birdset_subset):
-    #     segments = []
-    #     for example in tqdm(shard):
-    #         if segments:
-    #             segments.append(extract_segments_from_example(example, segment_length_in_s, birdset_subset))
-    #     return segments
-
     # Define features of segments dataset
-
-    features = Features({"audio": {
+    segments_features = Features({"audio": {
                                     "array": Sequence(Value("float32")),
                                     "sampling_rate": Value("int64"),
                                 },
@@ -269,11 +208,10 @@ def main():
     print("Process", num_batches, "batches with a batch size of", batch_size,
           "on", num_workers, "workers.")
 
-
     arrow_dir = process_batches_in_parallel(
         raw_dataset,
         process_batch_fn=extract_segments_from_batch,
-        features=features,
+        features=segments_features,
         batch_size=batch_size,
         num_batches=num_batches,
         num_workers=num_workers,
@@ -283,38 +221,12 @@ def main():
         initargs=(segment_length_in_s, birdset_subset)
     )
 
-    # # Extract segments from examples
-    # for example in tqdm(raw_dataset):
-    #     segments = extract_segments_from_example(example, segment_length_in_s, birdset_subset=birdset_subset)
-    #     if segments:
-    #         for row in segments:  # each row is a dict with a single audio dict
-    #             segments_dataset_rows["audio"].append(row["audio"])
-    #             segments_dataset_rows["time_freq_bounds"].append(row["time_freq_bounds"])
-    #             segments_dataset_rows["ebird_code"].append(row["ebird_code"])
-    #             segments_dataset_rows["birdset_code"].append(row["birdset_code"])
-    #             segments_dataset_rows["scientific_name"].append(row["scientific_name"])
-    #             segments_dataset_rows["common_name"].append(row["common_name"])
-    #             segments_dataset_rows["original_birdset_subset"].append(row["original_birdset_subset"])
-    #             segments_dataset_rows["original_file"].append(row["original_file"])
-
-
-
     # Calculate the end time and time taken
     end = time.time()
     length = end - start
 
-    # Show the results : this can be altered however you like
     print("Segmentation with", num_workers, "workers and", num_batches, "batches with a batch size of", batch_size,
             "took", length, "seconds!")
-
-    # Create segments dataset
-    #segments_dataset = Dataset.from_dict(segments_dataset_rows)
-
-    # Store segments dataset
-    #segments_dataset.save_to_disk(segmented_data_path)
-    #move_dataset(arrow_dir, segmented_data_path, store_backup=False)
-
-    #shutil.rmtree("hf_cache")
 
     print("Finished segementing audio!")
     

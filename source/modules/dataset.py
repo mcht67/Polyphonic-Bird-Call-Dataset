@@ -10,7 +10,7 @@ import shutil
 import gc
 import pyarrow as pa
 import json
-from functools import partial
+import hashlib
 
 from modules.dsp import num_samples_to_duration_s
 from modules.utils import log_memory
@@ -152,23 +152,9 @@ def flatten_features(prefix: str, features: Features) -> Features:
     flat = {}
 
     for key, value in features.items():
-        # value may be:
-        # - Value
-        # - dict (struct)
-        # - Sequence
-        #
-        # We want: raw_files_<key> = list of value
-        # NOT: struct with list children
-        # if isinstance(value, Sequence):
-        #     # Already a sequence → keep it as-is
-        #     flat[f"{prefix}_{key}"] = value
-        # else:
-        #     # Wrap exactly once, at the top level
         flat[f"{prefix}_{key}"] = Sequence(feature=value)
 
     return Features(flat)
-
-
 
 def filter_dataset_by_audio_array_length(dataset, min_duration_in_s):
     return [
@@ -185,37 +171,34 @@ def iterable_batch_generator(iterable_dataset, batch_size):
         yield batch_dict
 
 def clean_dir(temp_dir):
-     # Clean output directory
     if os.path.exists(temp_dir):
         print(f"Cleaning existing path: {temp_dir}")
         shutil.rmtree(temp_dir)
     os.makedirs(temp_dir)
 
-# def create_schema_from_features(features):
-#     return Dataset.from_dict({name: [] for name in features}, features=features).data.table.schema
-
 def create_schema_from_features(features):
-    dummy = {}
+    return Dataset.from_dict({name: [] for name in features}, features=features).data.table.schema
 
-    for name, feat in features.items():
-        if isinstance(feat, Sequence):
-            dummy[name] = []
-        elif isinstance(feat, dict):
-            dummy[name] = {
-                k: [] if isinstance(v, Sequence) else 0
-                for k, v in feat.items()
-            }
-        else:
-            dummy[name] = 0
+# def create_schema_from_features(features):
+#     dummy = {}
 
-    return Dataset.from_dict(
-        {k: [v] for k, v in dummy.items()},
-        features=features
-    ).data.table.schema
+#     for name, feat in features.items():
+#         if isinstance(feat, Sequence):
+#             dummy[name] = []
+#         elif isinstance(feat, dict):
+#             dummy[name] = {
+#                 k: [] if isinstance(v, Sequence) else 0
+#                 for k, v in feat.items()
+#             }
+#         else:
+#             dummy[name] = 0
 
+#     return Dataset.from_dict(
+#         {k: [v] for k, v in dummy.items()},
+#         features=features
+#     ).data.table.schema
 
 def create_dataset_info(temp_dir, features, total_shards):
-    # After renaming files
     print("Creating dataset metadata...")
 
     # Load one shard to infer info
@@ -241,19 +224,36 @@ def create_dataset_info(temp_dir, features, total_shards):
         }
     }
 
-def create_state_info(total_shards):
-    # Create state.json
-    return {
+def create_state_info(total_shards, features, data_dir="tmp_process"):
+    state = {
         "_data_files": [
             {"filename": f"data-{i:05d}-of-{total_shards:05d}.arrow"}
             for i in range(total_shards)
         ],
         "_fingerprint": None,
-        "_format_columns": None,
+        "_format_columns": list(features.keys()),
         "_format_kwargs": {},
-        "_format_type": None,
-        "_output_all_columns": False,
+        "_format_type": "arrow",
+        "_output_all_columns": True,
     }
+
+    # compute a dataset fingerprint
+    filepaths = [f"{data_dir}/{f['filename']}" for f in state["_data_files"]]
+    state["_fingerprint"] = compute_fingerprint(filepaths)
+
+    return state
+
+
+def compute_fingerprint(filepaths):
+    sha = hashlib.sha1()
+    for f in filepaths:
+        with open(f, "rb") as fp:
+            while True:
+                data = fp.read(2**20)
+                if not data:
+                    break
+                sha.update(data)
+    return sha.hexdigest()
 
 def process_batches_in_parallel(dataset, process_batch_fn, features, batch_size=10, 
                                 num_workers=1, num_batches=None, initializer=None, initargs=(),
@@ -307,7 +307,7 @@ def process_batches_in_parallel(dataset, process_batch_fn, features, batch_size=
             for batch_idx, batch_result in enumerate(tqdm(
                 pool.imap_unordered(
                     process_batch_fn,
-                    batch_gen, #batch_generator(dataset, batch_size),
+                    batch_gen,
                     chunksize=1
                 ),
                 total=num_batches,
@@ -316,8 +316,6 @@ def process_batches_in_parallel(dataset, process_batch_fn, features, batch_size=
                 # Write data from main process
                 batch_table = pa.Table.from_pylist(batch_result, schema=temp_schema)
                 writer.write_table(batch_table)
-                # batch_ds = Dataset.from_list(batch_result, features=features)
-                # writer.write_table(batch_ds.data.table)
 
                 batches_in_current_shard += 1
                 
@@ -366,7 +364,7 @@ def process_batches_in_parallel(dataset, process_batch_fn, features, batch_size=
     with open(os.path.join(temp_dir, "dataset_info.json"), "w") as f:
         json.dump(dataset_info, f, indent=2)
 
-    state_info = create_state_info(total_shards)
+    state_info = create_state_info(total_shards, features, temp_dir)
     with open(os.path.join(temp_dir, "state.json"), "w") as f:
         json.dump(state_info, f, indent=2)
 
@@ -374,172 +372,6 @@ def process_batches_in_parallel(dataset, process_batch_fn, features, batch_size=
     print(f"Arrow files: {total_shards} shards")
     
     return temp_dir
-
-# DATASET ITERABLE implementation TODO: remove if not needed
-
-# def process_batches_in_parallel_iter(dataset_iterable, process_batch_fn, features, batch_size=10, 
-#                                 num_workers=1, num_batches=None, initializer=None, initargs=(),
-#                                 temp_dir="tmp_process",
-#                                 batches_per_shard=10,
-#                                 batch_generator_fn=None):  # Adjust based on memory
-    
-#     # Check inputs
-#     if hasattr(dataset_iterable, "__iter__") is False:
-#         raise TypeError("dataset must be iterable")
-#     if batch_size < 1:
-#         raise ValueError(f"batch_size has to be >= 1, actual: {batch_size}")
-#     if num_workers < 1:
-#         raise ValueError(f"num_workers has to be >= 1, actual: {num_workers}")
-    
-#     # Clean temp dir if exists
-#     clean_dir(temp_dir)
-    
-#     # Create schema
-#     temp_schema = create_schema_from_features(features)
-    
-#     # Init shards
-#     shard_idx = 0
-#     batches_in_current_shard = 0
-#     current_shard_file = os.path.join(temp_dir, f"data-{shard_idx:05d}-of-XXXXX.arrow")
-    
-#     sink = None
-#     writer = None
-    
-#     # Create multiprocessing pool
-#     with get_context('spawn').Pool(
-#         num_workers,
-#         initializer=initializer,
-#         initargs=initargs,
-#         maxtasksperchild=10, # change this to 1 if memory starts to accumulate and there is not way to fix the memory leak
-#     ) as pool:
-        
-#         try:
-#             # Open first shard
-#             sink = pa.OSFile(current_shard_file, 'wb')
-#             writer = pa.ipc.new_stream(sink, temp_schema)
-            
-#             # Process batches in parallel
-#             for batch_idx, batch_result in enumerate(tqdm(
-#                 pool.imap_unordered(
-#                     process_batch_fn,
-#                     iterable_batch_generator(dataset_iterable, batch_size),
-#                     chunksize=1
-#                 ),
-#                 total=num_batches,
-#                 desc="Processing batches"
-#             )):
-            
-#                 # Write data from main process    
-#                 # batch_table = table_from_examples(batch_result, temp_schema)
-#                 # writer.write_table(batch_table)
-#                 batch_ds = Dataset.from_list(batch_result, features=features)
-#                 writer.write_table(batch_ds.data.table)
-
-#                 batches_in_current_shard += 1
-                
-#                 # Check if we should start a new shard
-#                 if batches_in_current_shard >= batches_per_shard:
-#                     # Close current shard
-#                     writer.close()
-#                     sink.close()
-                    
-#                     # Start new shard
-#                     shard_idx += 1
-#                     batches_in_current_shard = 0
-#                     current_shard_file = os.path.join(temp_dir, f"data-{shard_idx:05d}-of-XXXXX.arrow")
-                    
-#                     sink = pa.OSFile(current_shard_file, 'wb')
-#                     writer = pa.ipc.new_stream(sink, temp_schema)
-                    
-#                     print(f"\nStarted new shard {shard_idx}")
-                
-#                 del batch_ds, batch_table
-#                 gc.collect()
-                
-#                 print(f"Processed batch {batch_idx}, current shard {shard_idx}")
-
-#         except Exception as e:
-#             safe_close(writer, sink)
-#             raise
-#         finally:
-#             safe_close(writer, sink)
-
-#     gc.collect()
-    
-#     total_shards = shard_idx + 1
-#     print(f"\nCreated {total_shards} Arrow shards")
-    
-#     # Rename files with correct total count
-#     for i in range(total_shards):
-#         old_name = os.path.join(temp_dir, f"data-{i:05d}-of-XXXXX.arrow")
-#         new_name = os.path.join(temp_dir, f"data-{i:05d}-of-{total_shards:05d}.arrow")
-#         os.rename(old_name, new_name)
-    
-#     # Create dataset_info.json metadata
-#     print("Creating dataset metadata...")
-
-#     dataset_info = create_dataset_info(temp_dir, features, total_shards)
-#     with open(os.path.join(temp_dir, "dataset_info.json"), "w") as f:
-#         json.dump(dataset_info, f, indent=2)
-
-#     state_info = create_state_info(total_shards)
-#     with open(os.path.join(temp_dir, "state.json"), "w") as f:
-#         json.dump(state_info, f, indent=2)
-
-#     print(f"Dataset with examples saved to {temp_dir}")
-#     print(f"Arrow files: {total_shards} shards")
-    
-#     return temp_dir
-
-# def align_example_to_schema(example, schema):
-#     aligned = {}
-
-#     for field in schema:
-#         name = field.name
-#         value = example.get(name, None)
-#         field_type = field.type
-
-#         # Handle list fields
-#         if pa.types.is_list(field_type):
-#             if value is None:
-#                 aligned[name] = []
-#             elif isinstance(value, list):
-#                 # Remove None-only lists
-#                 if all(v is None for v in value):
-#                     aligned[name] = []
-#                 else:
-#                     aligned[name] = value
-#             else:
-#                 raise TypeError(f"{name} expected list, got {type(value)}")
-
-#         # Handle scalar fields
-#         else:
-#             aligned[name] = value
-
-#     return aligned
-
-# def table_from_examples(examples, schema):
-#     arrays = []
-
-#     for field in schema:
-#         name = field.name
-#         field_type = field.type
-
-#         column = [ex.get(name, None) for ex in examples]
-
-#         # Handle list types
-#         if pa.types.is_list(field_type):
-#             column = [
-#                 [] if (v is None or (isinstance(v, list) and all(x is None for x in v)))
-#                 else v
-#                 for v in column
-#             ]
-
-#         array = pa.array(column, type=field_type)
-#         arrays.append(array)
-
-#     return pa.Table.from_arrays(arrays, schema=schema)
-
 
 def safe_close(writer, sink):
     if writer is not None:
@@ -552,119 +384,6 @@ def safe_close(writer, sink):
             sink.close()
         except Exception:
             pass
-
-# def process_batches_in_parallel(dataset, process_batch_fn, features, batch_size=10, 
-#                                 num_workers=1, initializer=None, initargs=(),
-#                                 tmp_dir="tmp_sep"):
-
-#     if not dataset or len(dataset) == 0:
-#         raise ValueError("Dataset can not be empty")
-#     if batch_size < 1:
-#         raise ValueError(f"batch_size has to be >= 1, actual: {batch_size}")
-#     if num_workers < 1:
-#         raise ValueError(f"num_workers has to be >= 1, actual: {num_workers}")
-    
-#     # Clean up tmp_dir if it exists
-#     if os.path.exists(tmp_dir):
-#         print(f"Cleaning existing tmp_dir: {tmp_dir}")
-#         shutil.rmtree(tmp_dir)
-
-#     num_batches = (len(dataset) + batch_size - 1) // batch_size
-#     print("Process", num_batches, "batches with a batch size of", batch_size,
-#           "on", num_workers, "workers.")
-    
-#     # Create a temporary dataset to get the schema
-#     temp_schema = Dataset.from_dict(
-#         {name: [] for name in features}, 
-#         features=features
-#     ).data.table.schema
-    
-#     arrow_file = os.path.join(tmp_dir, "data.arrow")
-
-#     os.makedirs(tmp_dir, exist_ok=True)
-#     shard_paths = []
-
-#     with get_context('spawn').Pool(
-#         num_workers,
-#         initializer=initializer,
-#         initargs=initargs,
-#         maxtasksperchild=1,   # or higher, e.g. 5–10
-#     ) as pool:
-  
-#         with pa.OSFile(arrow_file, 'wb') as sink:
-#             with pa.ipc.new_stream(sink, temp_schema) as writer:
-                
-#                 for batch_idx, batch_result in enumerate(tqdm(
-#                     pool.imap_unordered(
-#                         process_batch_fn,
-#                         batch_generator(dataset, batch_size),
-#                         chunksize=1
-#                     ),
-#                     total=num_batches,
-#                     desc="Processing batches"
-#                 )):
-#                     # Convert batch to Arrow table and write directly
-#                     batch_ds = Dataset.from_list(batch_result, features=features)
-#                     writer.write_table(batch_ds.data.table)
-                    
-#                     del batch_ds, batch_result
-#                     gc.collect()
-
-#                     print(f"Processed batch {batch_idx}")
-        
-#     gc.collect()
-    
-#      # Load using stream reader
-#     print("Finalizing dataset...")
-#     with pa.memory_map(arrow_file, 'r') as source:
-#         with pa.ipc.open_stream(source) as reader:  # ← Changed from open_file
-#             arrow_table = reader.read_all()
-    
-#     # Create Dataset from the table
-#     final_dataset = Dataset(arrow_table)
-     
-#     return final_dataset
-
-# def process_batches_in_parallel(dataset, process_batch_fn, batch_size=10, 
-#                                  num_workers=1, initializer=None, initargs=()):
-    
-#     if not dataset or len(dataset) == 0:
-#         raise ValueError("Dataset can not be empty")
-#     if batch_size < 1:
-#         raise ValueError(f"batch_size has to be >= 1, actual: {batch_size}")
-#     if num_workers < 1:
-#         raise ValueError(f"num_workers has to be >= 1, actual: {num_workers}")
-
-#     num_batches = (len(dataset) + batch_size - 1) // batch_size
-#     print("Process", num_batches, "batches with a batch size of", batch_size, "on", num_workers, "workers.")
-    
-#     all_examples = []
-    
-#     with get_context('spawn').Pool(num_workers, initializer=initializer, 
-#                                      initargs=initargs) as pool: #,maxtasksperchild=1
-#         # Process batches with imap (lazy) instead of map (eager)
-#         for batch_result in tqdm(
-#             pool.imap(process_batch_fn, batch_generator(dataset, batch_size)),
-#             total=num_batches,
-#             desc="Processing batches"
-#         ):
-#             # Flatten and append this batch's results
-#             all_examples.extend(batch_result)
-            
-#             # Clean up batch result immediately
-#             del batch_result
-            
-#             # Force GC every few batches
-#             if len(all_examples) % (batch_size * 5) < batch_size:
-#                 gc.collect()
-
-#             print("Finished batch processing.")
-#             log_memory()
-    
-#     # Final cleanup
-#     gc.collect()
-    
-#     return Dataset.from_list(all_examples)
 
 def overwrite_dataset(dataset, dataset_path, store_backup=True):
     # Save to temporary location
