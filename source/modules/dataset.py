@@ -10,17 +10,33 @@ import shutil
 import gc
 import pyarrow as pa
 import json
+from functools import partial
 
 from modules.dsp import num_samples_to_duration_s
 from modules.utils import log_memory
 
 
+# def flatten_raw_examples(raw_examples):
+#     flattened = defaultdict(list)
+#     for ex in raw_examples:
+#         for key, val in ex.items():
+#             flattened[f"raw_files_{key}"].append(val)
+#     return dict(flattened)
+
 def flatten_raw_examples(raw_examples):
     flattened = defaultdict(list)
+
     for ex in raw_examples:
         for key, val in ex.items():
-            flattened[f"raw_files_{key}"].append(val)
+            if isinstance(val, dict):
+                # struct-of-lists
+                for k, v in val.items():
+                    flattened[f"raw_files_{key}_{k}"].append(v)
+            else:
+                flattened[f"raw_files_{key}"].append(val)
+
     return dict(flattened)
+
 
 def balance_dataset_by_species(dataset, method="undersample", seed=42, max_per_file=None, min_samples_per_species=None):
     """
@@ -56,16 +72,19 @@ def balance_dataset_by_species(dataset, method="undersample", seed=42, max_per_f
     for idx, name in enumerate(dataset['scientific_name']):
         species_to_indices.setdefault(name, []).append(idx)
 
-     # Remove species with unsufficient amount of samples if min_samples_per_species is set
+    # Remove species with unsufficient amount of samples if min_samples_per_species is set
+    species_to_remove = []
     species_removed = {}
     if min_samples_per_species:
         for key, values in species_to_indices.items():
             if len(values) < min_samples_per_species:
-                species_removed[key] = species_to_indices.pop(key)
+                species_to_remove.append(key)
 
-        # species_removed = {key: values for key, values in species_to_indices.items() if len(values) < min_samples_per_species}
-        # species_to_indices = {key: values for key, values in species_to_indices.items() if len(values) >= min_samples_per_species}
-        
+    for species_key in species_to_remove:
+        species_removed[species_key] = species_to_indices.pop(species_key)
+
+    # species_removed = {key: values for key, values in species_to_indices.items() if len(values) < min_samples_per_species}
+    # species_to_indices = {key: values for key, values in species_to_indices.items() if len(values) >= min_samples_per_species}
 
     # Get count
     counts = [len(indices) for indices in species_to_indices.values()]
@@ -114,11 +133,42 @@ def balance_dataset_by_species(dataset, method="undersample", seed=42, max_per_f
     random.shuffle(balanced_indices)
     return dataset.select(balanced_indices), species_removed
 
+# def flatten_features(prefix: str, features: Features) -> Features:
+#     flat = {}
+#     for key, value in features.items():
+#         flat[f"{prefix}_{key}"] = Sequence(value)
+#     return Features(flat)
+
+# def flatten_features(prefix: str, features: Features) -> Features:
+#     flat = {}
+
+#     for key, value in features.items():
+#         flat[f"{prefix}_{key}"] = Sequence(feature=value)
+
+#     return Features(flat)
+
+
 def flatten_features(prefix: str, features: Features) -> Features:
     flat = {}
+
     for key, value in features.items():
-        flat[f"{prefix}_{key}"] = Sequence(value)
+        # value may be:
+        # - Value
+        # - dict (struct)
+        # - Sequence
+        #
+        # We want: raw_files_<key> = list of value
+        # NOT: struct with list children
+        # if isinstance(value, Sequence):
+        #     # Already a sequence → keep it as-is
+        #     flat[f"{prefix}_{key}"] = value
+        # else:
+        #     # Wrap exactly once, at the top level
+        flat[f"{prefix}_{key}"] = Sequence(feature=value)
+
     return Features(flat)
+
+
 
 def filter_dataset_by_audio_array_length(dataset, min_duration_in_s):
     return [
@@ -141,8 +191,28 @@ def clean_dir(temp_dir):
         shutil.rmtree(temp_dir)
     os.makedirs(temp_dir)
 
+# def create_schema_from_features(features):
+#     return Dataset.from_dict({name: [] for name in features}, features=features).data.table.schema
+
 def create_schema_from_features(features):
-    return Dataset.from_dict({name: [] for name in features}, features=features).data.table.schema
+    dummy = {}
+
+    for name, feat in features.items():
+        if isinstance(feat, Sequence):
+            dummy[name] = []
+        elif isinstance(feat, dict):
+            dummy[name] = {
+                k: [] if isinstance(v, Sequence) else 0
+                for k, v in feat.items()
+            }
+        else:
+            dummy[name] = 0
+
+    return Dataset.from_dict(
+        {k: [v] for k, v in dummy.items()},
+        features=features
+    ).data.table.schema
+
 
 def create_dataset_info(temp_dir, features, total_shards):
     # After renaming files
@@ -188,12 +258,13 @@ def create_state_info(total_shards):
 def process_batches_in_parallel(dataset, process_batch_fn, features, batch_size=10, 
                                 num_workers=1, num_batches=None, initializer=None, initargs=(),
                                 temp_dir="tmp_process",
-                                batches_per_shard=10):  # Adjust based on memory
+                                batches_per_shard=10,
+                                generate_batches_fn=None):  # Adjust based on memory
     
     # Check inputs
     if not dataset or len(dataset) == 0:
         raise ValueError("Dataset can not be empty")
-    if batch_size < 1:
+    if batch_size < 1 and not generate_batches_fn:
         raise ValueError(f"batch_size has to be >= 1, actual: {batch_size}")
     if num_workers < 1:
         raise ValueError(f"num_workers has to be >= 1, actual: {num_workers}")
@@ -203,6 +274,8 @@ def process_batches_in_parallel(dataset, process_batch_fn, features, batch_size=
     
     # Create schema
     temp_schema = create_schema_from_features(features)
+    print(temp_schema)
+    print(features)
     
     # Init shards
     shard_idx = 0
@@ -224,12 +297,17 @@ def process_batches_in_parallel(dataset, process_batch_fn, features, batch_size=
             # Open first shard
             sink = pa.OSFile(current_shard_file, 'wb')
             writer = pa.ipc.new_stream(sink, temp_schema)
-            
+
+            if generate_batches_fn is None:
+                batch_gen = batch_generator(dataset, batch_size)
+            else:
+                batch_gen = generate_batches_fn
+
             # Process batches in parallel
             for batch_idx, batch_result in enumerate(tqdm(
                 pool.imap_unordered(
                     process_batch_fn,
-                    batch_generator(dataset, batch_size),
+                    batch_gen, #batch_generator(dataset, batch_size),
                     chunksize=1
                 ),
                 total=num_batches,
@@ -297,167 +375,170 @@ def process_batches_in_parallel(dataset, process_batch_fn, features, batch_size=
     
     return temp_dir
 
-def process_batches_in_parallel_iter(dataset_iterable, process_batch_fn, features, batch_size=10, 
-                                num_workers=1, num_batches=None, initializer=None, initargs=(),
-                                temp_dir="tmp_process",
-                                batches_per_shard=10):  # Adjust based on memory
+# DATASET ITERABLE implementation TODO: remove if not needed
+
+# def process_batches_in_parallel_iter(dataset_iterable, process_batch_fn, features, batch_size=10, 
+#                                 num_workers=1, num_batches=None, initializer=None, initargs=(),
+#                                 temp_dir="tmp_process",
+#                                 batches_per_shard=10,
+#                                 batch_generator_fn=None):  # Adjust based on memory
     
-    # Check inputs
-    if hasattr(dataset_iterable, "__iter__") is False:
-        raise TypeError("dataset must be iterable")
-    if batch_size < 1:
-        raise ValueError(f"batch_size has to be >= 1, actual: {batch_size}")
-    if num_workers < 1:
-        raise ValueError(f"num_workers has to be >= 1, actual: {num_workers}")
+#     # Check inputs
+#     if hasattr(dataset_iterable, "__iter__") is False:
+#         raise TypeError("dataset must be iterable")
+#     if batch_size < 1:
+#         raise ValueError(f"batch_size has to be >= 1, actual: {batch_size}")
+#     if num_workers < 1:
+#         raise ValueError(f"num_workers has to be >= 1, actual: {num_workers}")
     
-    # Clean temp dir if exists
-    clean_dir(temp_dir)
+#     # Clean temp dir if exists
+#     clean_dir(temp_dir)
     
-    # Create schema
-    temp_schema = create_schema_from_features(features)
+#     # Create schema
+#     temp_schema = create_schema_from_features(features)
     
-    # Init shards
-    shard_idx = 0
-    batches_in_current_shard = 0
-    current_shard_file = os.path.join(temp_dir, f"data-{shard_idx:05d}-of-XXXXX.arrow")
+#     # Init shards
+#     shard_idx = 0
+#     batches_in_current_shard = 0
+#     current_shard_file = os.path.join(temp_dir, f"data-{shard_idx:05d}-of-XXXXX.arrow")
     
-    sink = None
-    writer = None
+#     sink = None
+#     writer = None
     
-    # Create multiprocessing pool
-    with get_context('spawn').Pool(
-        num_workers,
-        initializer=initializer,
-        initargs=initargs,
-        maxtasksperchild=10, # change this to 1 if memory starts to accumulate and there is not way to fix the memory leak
-    ) as pool:
+#     # Create multiprocessing pool
+#     with get_context('spawn').Pool(
+#         num_workers,
+#         initializer=initializer,
+#         initargs=initargs,
+#         maxtasksperchild=10, # change this to 1 if memory starts to accumulate and there is not way to fix the memory leak
+#     ) as pool:
         
-        try:
-            # Open first shard
-            sink = pa.OSFile(current_shard_file, 'wb')
-            writer = pa.ipc.new_stream(sink, temp_schema)
+#         try:
+#             # Open first shard
+#             sink = pa.OSFile(current_shard_file, 'wb')
+#             writer = pa.ipc.new_stream(sink, temp_schema)
             
-            # Process batches in parallel
-            for batch_idx, batch_result in enumerate(tqdm(
-                pool.imap_unordered(
-                    process_batch_fn,
-                    iterable_batch_generator(dataset_iterable, batch_size),
-                    chunksize=1
-                ),
-                total=num_batches,
-                desc="Processing batches"
-            )):
+#             # Process batches in parallel
+#             for batch_idx, batch_result in enumerate(tqdm(
+#                 pool.imap_unordered(
+#                     process_batch_fn,
+#                     iterable_batch_generator(dataset_iterable, batch_size),
+#                     chunksize=1
+#                 ),
+#                 total=num_batches,
+#                 desc="Processing batches"
+#             )):
             
-                # Write data from main process    
-                # batch_table = table_from_examples(batch_result, temp_schema)
-                # writer.write_table(batch_table)
-                batch_ds = Dataset.from_list(batch_result, features=features)
-                writer.write_table(batch_ds.data.table)
+#                 # Write data from main process    
+#                 # batch_table = table_from_examples(batch_result, temp_schema)
+#                 # writer.write_table(batch_table)
+#                 batch_ds = Dataset.from_list(batch_result, features=features)
+#                 writer.write_table(batch_ds.data.table)
 
-                batches_in_current_shard += 1
+#                 batches_in_current_shard += 1
                 
-                # Check if we should start a new shard
-                if batches_in_current_shard >= batches_per_shard:
-                    # Close current shard
-                    writer.close()
-                    sink.close()
+#                 # Check if we should start a new shard
+#                 if batches_in_current_shard >= batches_per_shard:
+#                     # Close current shard
+#                     writer.close()
+#                     sink.close()
                     
-                    # Start new shard
-                    shard_idx += 1
-                    batches_in_current_shard = 0
-                    current_shard_file = os.path.join(temp_dir, f"data-{shard_idx:05d}-of-XXXXX.arrow")
+#                     # Start new shard
+#                     shard_idx += 1
+#                     batches_in_current_shard = 0
+#                     current_shard_file = os.path.join(temp_dir, f"data-{shard_idx:05d}-of-XXXXX.arrow")
                     
-                    sink = pa.OSFile(current_shard_file, 'wb')
-                    writer = pa.ipc.new_stream(sink, temp_schema)
+#                     sink = pa.OSFile(current_shard_file, 'wb')
+#                     writer = pa.ipc.new_stream(sink, temp_schema)
                     
-                    print(f"\nStarted new shard {shard_idx}")
+#                     print(f"\nStarted new shard {shard_idx}")
                 
-                del batch_ds, batch_table
-                gc.collect()
+#                 del batch_ds, batch_table
+#                 gc.collect()
                 
-                print(f"Processed batch {batch_idx}, current shard {shard_idx}")
+#                 print(f"Processed batch {batch_idx}, current shard {shard_idx}")
 
-        except Exception as e:
-            safe_close(writer, sink)
-            raise
-        finally:
-            safe_close(writer, sink)
+#         except Exception as e:
+#             safe_close(writer, sink)
+#             raise
+#         finally:
+#             safe_close(writer, sink)
 
-    gc.collect()
+#     gc.collect()
     
-    total_shards = shard_idx + 1
-    print(f"\nCreated {total_shards} Arrow shards")
+#     total_shards = shard_idx + 1
+#     print(f"\nCreated {total_shards} Arrow shards")
     
-    # Rename files with correct total count
-    for i in range(total_shards):
-        old_name = os.path.join(temp_dir, f"data-{i:05d}-of-XXXXX.arrow")
-        new_name = os.path.join(temp_dir, f"data-{i:05d}-of-{total_shards:05d}.arrow")
-        os.rename(old_name, new_name)
+#     # Rename files with correct total count
+#     for i in range(total_shards):
+#         old_name = os.path.join(temp_dir, f"data-{i:05d}-of-XXXXX.arrow")
+#         new_name = os.path.join(temp_dir, f"data-{i:05d}-of-{total_shards:05d}.arrow")
+#         os.rename(old_name, new_name)
     
-    # Create dataset_info.json metadata
-    print("Creating dataset metadata...")
+#     # Create dataset_info.json metadata
+#     print("Creating dataset metadata...")
 
-    dataset_info = create_dataset_info(temp_dir, features, total_shards)
-    with open(os.path.join(temp_dir, "dataset_info.json"), "w") as f:
-        json.dump(dataset_info, f, indent=2)
+#     dataset_info = create_dataset_info(temp_dir, features, total_shards)
+#     with open(os.path.join(temp_dir, "dataset_info.json"), "w") as f:
+#         json.dump(dataset_info, f, indent=2)
 
-    state_info = create_state_info(total_shards)
-    with open(os.path.join(temp_dir, "state.json"), "w") as f:
-        json.dump(state_info, f, indent=2)
+#     state_info = create_state_info(total_shards)
+#     with open(os.path.join(temp_dir, "state.json"), "w") as f:
+#         json.dump(state_info, f, indent=2)
 
-    print(f"Dataset with examples saved to {temp_dir}")
-    print(f"Arrow files: {total_shards} shards")
+#     print(f"Dataset with examples saved to {temp_dir}")
+#     print(f"Arrow files: {total_shards} shards")
     
-    return temp_dir
+#     return temp_dir
 
-def align_example_to_schema(example, schema):
-    aligned = {}
+# def align_example_to_schema(example, schema):
+#     aligned = {}
 
-    for field in schema:
-        name = field.name
-        value = example.get(name, None)
-        field_type = field.type
+#     for field in schema:
+#         name = field.name
+#         value = example.get(name, None)
+#         field_type = field.type
 
-        # Handle list fields
-        if pa.types.is_list(field_type):
-            if value is None:
-                aligned[name] = []
-            elif isinstance(value, list):
-                # Remove None-only lists
-                if all(v is None for v in value):
-                    aligned[name] = []
-                else:
-                    aligned[name] = value
-            else:
-                raise TypeError(f"{name} expected list, got {type(value)}")
+#         # Handle list fields
+#         if pa.types.is_list(field_type):
+#             if value is None:
+#                 aligned[name] = []
+#             elif isinstance(value, list):
+#                 # Remove None-only lists
+#                 if all(v is None for v in value):
+#                     aligned[name] = []
+#                 else:
+#                     aligned[name] = value
+#             else:
+#                 raise TypeError(f"{name} expected list, got {type(value)}")
 
-        # Handle scalar fields
-        else:
-            aligned[name] = value
+#         # Handle scalar fields
+#         else:
+#             aligned[name] = value
 
-    return aligned
+#     return aligned
 
-def table_from_examples(examples, schema):
-    arrays = []
+# def table_from_examples(examples, schema):
+#     arrays = []
 
-    for field in schema:
-        name = field.name
-        field_type = field.type
+#     for field in schema:
+#         name = field.name
+#         field_type = field.type
 
-        column = [ex.get(name, None) for ex in examples]
+#         column = [ex.get(name, None) for ex in examples]
 
-        # Handle list types
-        if pa.types.is_list(field_type):
-            column = [
-                [] if (v is None or (isinstance(v, list) and all(x is None for x in v)))
-                else v
-                for v in column
-            ]
+#         # Handle list types
+#         if pa.types.is_list(field_type):
+#             column = [
+#                 [] if (v is None or (isinstance(v, list) and all(x is None for x in v)))
+#                 else v
+#                 for v in column
+#             ]
 
-        array = pa.array(column, type=field_type)
-        arrays.append(array)
+#         array = pa.array(column, type=field_type)
+#         arrays.append(array)
 
-    return pa.Table.from_arrays(arrays, schema=schema)
+#     return pa.Table.from_arrays(arrays, schema=schema)
 
 
 def safe_close(writer, sink):

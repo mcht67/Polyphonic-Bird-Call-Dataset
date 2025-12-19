@@ -1,6 +1,5 @@
 import numpy as np
 import shutil
-import tempfile
 from pathlib import Path
 from omegaconf import OmegaConf
 from datasets import load_from_disk, Sequence, Value, Features, Audio, Dataset
@@ -8,22 +7,20 @@ from librosa import resample
 import time
 from datetime import datetime
 import json
+import math
+from functools import partial
 
-from modules.dataset import flatten_features, concatenate_datasets, filter_dataset_by_audio_array_length, flatten_raw_examples, balance_dataset_by_species
-from modules.utils import IndexMap
+from modules.dataset import flatten_features, concatenate_datasets, filter_dataset_by_audio_array_length, flatten_raw_examples, balance_dataset_by_species, process_batches_in_parallel, move_dataset
+from modules.utils import IndexMap, get_num_workers
 from modules.dsp import calculate_rms, normalize_to_dBFS, dBFS_to_gain, num_samples_to_duration_s, duration_s_to_num_samples
 
 def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, signal_levels, snr_values, mix_levels, segment_length_in_s, sampling_rate, random_seed=None):
 
     # Decode noise audio data
-    noise_data = noise_data.cast_column("audio", Audio(sampling_rate=sampling_rate))
+    #noise_data = noise_data.cast_column("audio", Audio(sampling_rate=sampling_rate))
 
     # Get segment lenght in samples
     segment_length_in_samples = duration_s_to_num_samples(segment_length_in_s, sampling_rate)
-
-    # Filter noise by length
-    filtered_noise_data = filter_dataset_by_audio_array_length(noise_data, segment_length_in_s)
-    print(f"Filtered noise dataset: kept {len(filtered_noise_data)} of {len(noise_data)} samples")
 
     # Create polyphony degree map and get initial value
     polyphony_degrees = list(range(1, max_polyphony_degree + 1)) 
@@ -122,15 +119,15 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, signal_lev
             if len(birdset_code_multilabel) == polyphony_degree:
 
                 # Check if still noise files left
-                if not mix_id < len(filtered_noise_data):
+                if not mix_id < len(noise_data):
                     print("Used all noise files!")
                     break
 
                  # Get noise signal
-                noise_array = filtered_noise_data[mix_id]['audio']['array']
-                noise_sampling_rate = filtered_noise_data[mix_id]['audio']['sampling_rate']
+                noise_array = noise_data[mix_id]['audio']['array']
+                noise_sampling_rate = noise_data[mix_id]['audio']['sampling_rate']
                 noise_signal = resample(noise_array, orig_sr=noise_sampling_rate, target_sr=sampling_rate)
-                noise_file = Path(filtered_noise_data[mix_id]['filepath']).name
+                noise_file = Path(noise_data[mix_id]['filepath']).name
 
                 # Normalize noise to 0 dBFS / RMS = 1
                 noise_orig_rms = calculate_rms(noise_signal, sampling_rate)
@@ -213,6 +210,50 @@ def generate_mix_batches(raw_data, noise_data, max_polyphony_degree, signal_leve
     if batch:
         yield batch
 
+def mix_batch_generator(raw_dataset, noise_dataset, raw_data_batch_size, max_polyphony_degree):
+
+    # Calculate max number of noise samples needed per batch
+    num_raw_examples_per_polyphony_map = math.ceil((max_polyphony_degree * (max_polyphony_degree + 1)) / 2) # Gauß sum
+    #average_num_files_per_mixture = number_of_files_per_polyphony_map_full_iteration / max_polyphony_degree
+    num_polyphony_map_per_batch = math.ceil(raw_data_batch_size / num_raw_examples_per_polyphony_map)
+    num_noise_samples_per_polyphony_map = max_polyphony_degree
+    noise_batch_size = num_polyphony_map_per_batch * num_noise_samples_per_polyphony_map
+    noise_data_idx = 0
+
+    for raw_data_idx in range(0, len(raw_dataset), raw_data_batch_size):
+        raw_batch = raw_dataset.select(range(raw_data_idx, min(raw_data_idx+raw_data_batch_size, len(raw_dataset))))
+
+        if len(noise_dataset) < (noise_data_idx + noise_batch_size):
+            noise_data_idx = 0
+            print("Warning: noise data is not sufficient. files have to be used multiple times.")
+        noise_batch = noise_dataset.select(range(noise_data_idx, noise_data_idx+noise_batch_size))
+        noise_data_idx += 1
+
+        yield raw_batch, noise_batch
+
+def init_mixing_worker(config):
+    print("Start initilization of worker.")
+    global _max_polyphony_degree, _signal_levels, _snr_values, _mix_levels, _segment_length_in_s, _sampling_rate
+
+    _max_polyphony_degree=config['max_polyphony_degree']
+    _signal_levels=config['signal_levels']
+    _snr_values=config['snr_values']
+    _mix_levels=config['mix_levels']
+    _segment_length_in_s=config['segment_length_in_s']
+    _sampling_rate=config['sampling_rate']
+    print("Initilization of worker succesful.")
+
+
+def mix_batch(batch):
+
+    raw_data, noise_data = batch
+
+    mixed_examples = []
+    for example in generate_mix_examples(raw_data, noise_data, _max_polyphony_degree, _signal_levels, _snr_values, _mix_levels, _segment_length_in_s, _sampling_rate):
+        mixed_examples.append(example)
+        return mixed_examples
+
+
 def main():
 
     print("Start mixing audio...")
@@ -223,7 +264,7 @@ def main():
     segmented_data_path =  cfg.paths.segmented_data
     noise_data_path = cfg.paths.noise_data
     polyphonic_dataset_path = cfg.paths.polyphonic_data
-    polyphonic_metadata_path = cfg.path.poyphonic_metadata
+    #polyphonic_metadata_path = cfg.path.polyphonic_metadata
 
     method = cfg.balance_dataset.method
     max_per_file = cfg.balance_dataset.max_per_file
@@ -248,6 +289,11 @@ def main():
    
     # Load no bird/noise dataset
     noise_dataset = load_from_disk(noise_data_path)
+    noise_dataset = noise_dataset.cast_column("audio", Audio())
+    # Filter noise by length
+    #filtered_noise_dataset = filter_dataset_by_audio_array_length(noise_dataset, segment_length_in_s)
+    filtered_noise_dataset = noise_dataset.filter(lambda example: segment_length_in_s <= num_samples_to_duration_s(len(example['audio']['array']), example['audio']['sampling_rate']))
+    print(f"Filtered noise dataset: kept {len(filtered_noise_dataset)} of {len(noise_dataset)} samples")
     
     # Setup features
     raw_features = balanced_dataset.features
@@ -277,33 +323,74 @@ def main():
         **additional_raw_features
     })
 
+    #Shuffle dataset
+    # print("cast to audio")
+    # balanced_dataset.cast_column("audio", Audio())
+    # print("done")
+
+    print("shuffle dataset")
+    shuffled_dataset = balanced_dataset.shuffle(seed=random_seed)
+    print("done")
+
     # Generate batches
     print("Mix audio in batches", flush=True)
 
     temp_dirs = []
-
-    balanced_dataset.cast_column("audio", Audio())
-
+     
     # Calculate the start time
     start = time.time()
     print("Mix the whole dataset with 1 worker.")
 
-    for i, batch in enumerate(generate_mix_batches(balanced_dataset, noise_dataset,
-                                               max_polyphony_degree, 
-                                               signal_levels, snr_values, mix_levels,
-                                               segment_length_in_s, 
-                                               sampling_rate, random_seed=random_seed)):
-        ds = Dataset.from_list(batch, features=mix_features)
-        print(f'finished batch {i}')
-        
-        tmp_dir = tempfile.mkdtemp(prefix=f"mix_batch_{i}_")
-        ds.save_to_disk(tmp_dir)
-        temp_dirs.append(tmp_dir)
+    # multiprocessing config
+    num_workers = get_num_workers(gb_per_worker=2, cpu_percentage=0.8)
+    batch_size = 50 # ceil(((len(raw_dataset) + 1) / num_workers)//10)
 
-    # Concatenate batches
-    print("Concatenate batches", flush=True)
-    datasets = [load_from_disk(d) for d in temp_dirs]
-    full_dataset = concatenate_datasets(datasets)
+    num_batches = (len(shuffled_dataset) + batch_size - 1) // batch_size
+    print("Process", num_batches, "batches with a batch size of", batch_size,
+          "on", num_workers, "workers.")
+    
+    # Get mix configuration
+    mix_config = {
+        'max_polyphony_degree': max_polyphony_degree,
+        'signal_levels': signal_levels,
+        'snr_values': snr_values,
+        'mix_levels': mix_levels,
+        'segment_length_in_s': segment_length_in_s,
+        'sampling_rate': sampling_rate,
+    }
+
+
+    # Setup batch generator
+    batch_generator_fn = mix_batch_generator(shuffled_dataset, filtered_noise_dataset, batch_size, max_polyphony_degree)
+
+    arrow_dir = process_batches_in_parallel(shuffled_dataset,
+                                            process_batch_fn=mix_batch,
+                                            features=mix_features,
+                                            num_workers=2,
+                                            num_batches=num_batches,
+                                            batches_per_shard=1,
+                                            initializer=init_mixing_worker,
+                                            initargs=(mix_config,),
+                                            temp_dir="temp_mix",
+                                            generate_batches_fn=batch_generator_fn
+                                            )
+
+    # for i, batch in enumerate(generate_mix_batches(shuffled_dataset, noise_dataset,
+    #                                            max_polyphony_degree, 
+    #                                            signal_levels, snr_values, mix_levels,
+    #                                            segment_length_in_s, 
+    #                                            sampling_rate, random_seed=random_seed)):
+    #     ds = Dataset.from_list(batch, features=mix_features)
+    #     print(f'finished batch {i}')
+        
+    #     tmp_dir = tempfile.mkdtemp(prefix=f"mix_batch_{i}_")
+    #     ds.save_to_disk(tmp_dir)
+    #     temp_dirs.append(tmp_dir)
+
+    # # Concatenate batches
+    # print("Concatenate batches", flush=True)
+    # datasets = [load_from_disk(d) for d in temp_dirs]
+    # full_dataset = concatenate_datasets(datasets)
 
     # Calculate the end time and time taken
     end = time.time()
@@ -312,22 +399,23 @@ def main():
     # Show the results : this can be altered however you like
     print("Mixing with 1 worker took ", length, "seconds!")
 
-    # Save final dataset
-    full_dataset.save_to_disk(polyphonic_dataset_path)
-    print(f'Saved mixed dataset to {polyphonic_dataset_path}', flush=True)
+    # # Save final dataset
+    move_dataset(arrow_dir, polyphonic_dataset_path, store_backup=False)
+    # full_dataset.save_to_disk(polyphonic_dataset_path)
+    # print(f'Saved mixed dataset to {polyphonic_dataset_path}', flush=True)
 
-     # Store stage results for dvc tracking
-    data = {
-        "datetime": datetime.now().isoformat(),
-        "num_examples": len(full_dataset),
-        "processing_time_seconds": length,
-        "dataset_path": polyphonic_dataset_path,
-        "features": list(mix_features.keys()),
-        "species removed": species_removed
-    }
+    #  # Store stage results for dvc tracking
+    # data = {
+    #     "datetime": datetime.now().isoformat(),
+    #     "num_examples": len(full_dataset),
+    #     "processing_time_seconds": length,
+    #     "dataset_path": polyphonic_dataset_path,
+    #     "features": list(mix_features.keys()),
+    #     "species removed": species_removed
+    # }
 
-    with open(polyphonic_metadata_path, "w") as f:
-        json.dump(data, f, indent=2)
+    # with open(polyphonic_metadata_path, "w") as f:
+    #     json.dump(data, f, indent=2)
 
     # Remove tmp files
     for d in temp_dirs:
