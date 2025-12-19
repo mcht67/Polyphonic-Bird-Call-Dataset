@@ -1,7 +1,7 @@
 import subprocess
 import os
 
-import load_datasets, separate_audio, segment_audio, balance_dataset, mix_audio
+import load_datasets, separate_audio, segment_audio, mix_audio
 
 def main():
 
@@ -26,9 +26,6 @@ def main():
 
   # Segment audio
   segment_audio.main()
-
-  # Balance dataset
-  #balance_dataset.main()
 
   # Mix audio
   mix_audio.main()

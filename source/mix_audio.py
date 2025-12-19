@@ -272,6 +272,7 @@ def main():
     # Load segmented dataset# 
     segmented_dataset = load_from_disk(segmented_data_path)
     sampling_rate = segmented_dataset[0]['audio']['sampling_rate']
+    temp_dir = "temp/mix"
 
     # Balance dataset
     balanced_dataset, species_removed = balance_dataset_by_species(segmented_dataset, method, seed=random_seed, max_per_file=max_per_file, min_samples_per_species=50)
@@ -347,7 +348,7 @@ def main():
                                             batches_per_shard=batches_per_shard,
                                             initializer=init_mixing_worker,
                                             initargs=(mix_config,),
-                                            temp_dir="temp_mix",
+                                            temp_dir=temp_dir,
                                             generate_batches_fn=batch_generator_fn
                                             )
 

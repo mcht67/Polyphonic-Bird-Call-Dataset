@@ -43,6 +43,7 @@ def main():
     raw_dataset = load_from_disk(raw_data_path) # This does not cache the data, but loads directly from disk
     #raw_dataset = raw_dataset.select(range(8))
     raw_dataset = raw_dataset.cast_column("audio", Audio(sampling_rate=sampling_rate))
+    temp_dir = "temp/separation"
 
     # Remove known bad indices
     bad_indices = [1757]  # Add more if you find them
@@ -93,7 +94,7 @@ def main():
         raw_dataset,
         process_batch_fn=separate_batch,
         features=features,
-        temp_dir="temp_sep",
+        temp_dir=temp_dir,
         batch_size=batch_size,
         batches_per_shard=batches_per_shard,
         num_batches=num_batches,

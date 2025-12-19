@@ -175,6 +175,7 @@ def main():
 
     # Load source separated dataset
     raw_dataset = load_from_disk(raw_data_path)
+    temp_dir = "temp/segments"
 
     # Check if column 'sources' and nested feature 'detections' exist in raw_dataset
     if  not "sources" in raw_dataset.column_names:
@@ -215,7 +216,7 @@ def main():
         batch_size=batch_size,
         num_batches=num_batches,
         num_workers=num_workers,
-        temp_dir="tmp_segment",
+        temp_dir=temp_dir,
         batches_per_shard=batches_per_shard,
         initializer=init_segment_worker,
         initargs=(segment_length_in_s, birdset_subset)
