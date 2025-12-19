@@ -23,14 +23,14 @@ def main():
     analysis_metadata_path = cfg.paths.analysis_metadata
 
     # Load dataset with separateed sources
-    #raw_dataset = load_from_disk(raw_data_path)
-    raw_dataset = load_dataset(
-        "arrow",
-        data_files=os.path.join(raw_data_path, "data-*.arrow"),
-        #streaming=True,
-        cache_dir="hf_cache",
-       split="train"
-    ) # This copies the data into cache -> use DatasetIterable instead (Streming=True) or remove cache later
+    raw_dataset = load_from_disk(raw_data_path) # This should work as long as dataset_info.json and state.json exist
+    # raw_dataset = load_dataset(
+    #     "arrow",
+    #     data_files=os.path.join(raw_data_path, "data-*.arrow"),
+    #     #streaming=True,
+    #     cache_dir="hf_cache",
+    #    split="train"
+    # ) # This copies the data into cache -> use DatasetIterable instead (Streming=True) or remove cache later
 
     #raw_dataset = raw_dataset.take(10) #
     raw_dataset = raw_dataset.select(range(10))
@@ -109,7 +109,7 @@ def main():
 
     print("Finished analyzing audio birdnetlib!")
 
-    shutil.rmtree("hf_cache")
+    #shutil.rmtree("hf_cache")
 
     # Show the results : this can be altered however you like
     print("Analysis with", num_workers, "worker took", length, "seconds!")

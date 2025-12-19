@@ -179,14 +179,14 @@ def main():
     segment_length_in_s = cfg.segmentation.segment_length_in_s
 
     # Load source separated dataset
-    raw_dataset = load_from_disk(raw_data_path) # This should work as long as dataset_info.json and state.json exist
-    # raw_dataset = load_dataset(
-    #     "arrow",
-    #     data_files=os.path.join(raw_data_path, "data-*.arrow"),
-    #     #streaming=True,
-    #     split="train",
-    #     cache_dir="hf_cache"
-    # )
+    #raw_dataset = load_from_disk(raw_data_path) # This should work as long as dataset_info.json and state.json exist
+    raw_dataset = load_dataset(
+        "arrow",
+        data_files=os.path.join(raw_data_path, "data-*.arrow"),
+        #streaming=True,
+        split="train",
+        cache_dir="hf_cache"
+    )
     #raw_dataset = raw_dataset['train']
 
     # Check if column 'sources' and nested feature 'detections' exist in raw_dataset
