@@ -573,3 +573,55 @@ def extract_relevant_bounds(segment_start_time, segment_end_time, time_freq_boun
         relevant_bounds.append((relative_start, relative_end, low_f, high_f))
 
     return relevant_bounds
+
+def detect_highest_energy_region(audio, window_duration=1.0, sample_rate=44100, hop_size=None):
+    """
+    Detects the time region with the highest RMS (root-mean-square) energy.
+    
+        Parameters:
+    -----------
+    audio : numpy.ndarray
+        1D array containing the audio samples
+    window_duration : float, optional
+        Duration of the analysis window in seconds (default: 1.0)
+    sample_rate : int, optional
+        Sample rate of the audio in Hz (default: 44100)
+    hop_size : int, optional
+        Number of samples to move the window for each analysis step.
+        If None, uses window_size // 4 (default: None)
+    
+    Returns:
+    --------
+    tuple of (int, int)
+        Start and end sample indices of the highest energy region
+    """
+    window_size = int(window_duration * sample_rate)
+    
+    if hop_size is None:
+        hop_size = window_size // 4
+    
+    if len(audio) < window_size:
+        return 0, len(audio)
+    
+    # Compute squared samples once
+    audio_squared = audio ** 2
+    
+    # Use cumulative sum for O(1) window energy computation and add leading zero for simpler indexing
+    cumsum = np.concatenate([[0], np.cumsum(audio_squared)])
+    
+    # Pre-compute all window energies
+    num_windows = (len(audio) - window_size) // hop_size + 1
+    energies = np.zeros(num_windows)
+    
+    for i in range(num_windows):
+        start = i * hop_size
+        end = start + window_size
+        # Energy is difference of cumulative sums
+        energies[i] = cumsum[end] - cumsum[start]
+    
+    # Find maximum
+    best_idx = np.argmax(energies)
+    best_start = best_idx * hop_size
+    best_end = best_start + window_size
+    
+    return best_start, best_end

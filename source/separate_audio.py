@@ -3,11 +3,12 @@ from omegaconf import OmegaConf
 import time
 from datetime import datetime
 import json
+from functools import partial
 
 from integrations.bird_mixit.source_separation import separate_batch, init_separation_worker
 from modules.dataset import process_batches_in_parallel, move_dataset
 from modules.utils import get_num_workers
-from modules.dataset import truncate_batch
+from modules.dataset import truncate_example
 
 def add_sources_column(dataset):
    # Define the schema for the new column holding the sources data
@@ -55,13 +56,15 @@ def main():
 
     # Truncate audio arrays to 30s max
     print("Start truncating examples....")
-    num_workers = get_num_workers(cpu_percentage=0.8, gb_per_worker=1.5)
+    num_workers = 1 #get_num_workers(cpu_percentage=0.8, gb_per_worker=1.5)
+
+    truncate_fn = partial(truncate_example, max_duration_s=max_duration_s)
 
     raw_dataset = raw_dataset.map(
-        lambda batch: truncate_batch(batch, max_duration_s=max_duration_s),
-        batched=True,
-        batch_size=30,  # Adjust based on your memory
-        writer_batch_size=30,
+        truncate_fn, #lambda batch: truncate_batch(batch, max_duration_s=max_duration_s),
+        #batched=True,
+        #batch_size=30,  # Adjust based on your memory
+        #writer_batch_size=30,
         num_proc=num_workers,
         keep_in_memory=False
     )

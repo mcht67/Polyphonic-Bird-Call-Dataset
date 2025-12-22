@@ -180,7 +180,6 @@ def main():
     # Check if column 'sources' and nested feature 'detections' exist in raw_dataset
     if  not "sources" in raw_dataset.column_names:
         raise Exception("Can not segment Dataset. Dataset does not contain column 'sources'.")
-    #elif not "detections" in raw_dataset.features['sources'].feature.keys():
     elif not "detections" in raw_dataset.features['sources'][0].keys():
         raise Exception("Can not segment Dataset. Nested feature 'detections' does not exist in column 'sources'.")
     

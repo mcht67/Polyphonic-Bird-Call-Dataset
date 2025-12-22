@@ -1,16 +1,12 @@
 import numpy as np
-import shutil
 from pathlib import Path
 from omegaconf import OmegaConf
 from datasets import load_from_disk, Sequence, Value, Features, Audio, Dataset
 from librosa import resample
 import time
-from datetime import datetime
-import json
 import math
-from functools import partial
 
-from modules.dataset import flatten_features, concatenate_datasets, filter_dataset_by_audio_array_length, flatten_raw_examples, balance_dataset_by_species, process_batches_in_parallel, move_dataset
+from modules.dataset import flatten_features, flatten_raw_examples, balance_dataset_by_species, process_batches_in_parallel, move_dataset
 from modules.utils import IndexMap, get_num_workers
 from modules.dsp import calculate_rms, normalize_to_dBFS, dBFS_to_gain, num_samples_to_duration_s, duration_s_to_num_samples
 

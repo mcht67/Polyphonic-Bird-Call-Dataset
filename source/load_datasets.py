@@ -48,6 +48,7 @@ def main():
     # Load Xeno Canto data
     xc_subset_name = dataset_subset + '_xc'
     raw_dataset = load_dataset('DBD-research-group/BirdSet', xc_subset_name, split='train', trust_remote_code=True)
+
     # Load soundscape data
     soundscape_subset_name = dataset_subset +'_scape'
     soundscape_5s_dataset = load_dataset('DBD-research-group/BirdSet', soundscape_subset_name, split='test_5s', trust_remote_code=True)
@@ -61,7 +62,7 @@ def main():
     test_dataset.save_to_disk(test_data_path)
     noise_dataset.save_to_disk(noise_data_path)
 
-    # Store raw dataset meta data fro dvc tracking
+    # Store raw dataset meta data for dvc tracking
     raw_data_metadata = {
         "fingerprint": raw_dataset._fingerprint,
         "num_rows": len(raw_dataset),
@@ -70,7 +71,10 @@ def main():
         "datetime": datetime.now().isoformat()
     }
 
-    os.makedirs(raw_data_metadata_path, exist_ok=True)
+    metadata_dir = os.path.dirname(raw_data_metadata_path)
+    if metadata_dir:
+        os.makedirs(metadata_dir, exist_ok=True)
+
     with open(raw_data_metadata_path, "w") as f:
         json.dump(raw_data_metadata, f, indent=2)
 

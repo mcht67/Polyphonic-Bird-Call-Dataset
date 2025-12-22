@@ -12,7 +12,7 @@ import pyarrow as pa
 import json
 import hashlib
 
-from modules.dsp import num_samples_to_duration_s
+from modules.dsp import num_samples_to_duration_s, duration_s_to_num_samples, detect_highest_energy_region
 from modules.utils import log_memory
 
 
@@ -424,16 +424,112 @@ def move_dataset(arrow_dir, dataset_path, store_backup=False):
     print(f"Dataset successfully moved to {dataset_path}")
     return
 
-def truncate_example(example, max_duration_s):
+def get_area_of_interest(example, max_duration_s):
     max_num_samples = int(max_duration_s * example["audio"]["sampling_rate"])
-    example["audio"]["array"] = example["audio"]["array"][:max_num_samples]
+    audio_array = example["audio"]["array"]
+
+    start_time = example['start_time']
+    end_time = example['end_time']
+
+    start_sample = duration_s_to_num_samples(start_time) if start_time else None
+    end_sample = duration_s_to_num_samples(end_time) if end_time else None
+    event_samples = end_sample - start_sample if start_sample and end_sample else None
+
+    if len(audio_array) <= max_num_samples:
+        return 0, len(audio_array)
+    if not start_sample and not end_sample:
+        return 0, max_num_samples
+    elif not start_sample:
+        return end_sample - max_num_samples, end_sample
+    elif not end_sample:
+        return start_sample, min(len(audio_array), start_sample + max_num_samples)
+    elif event_samples >= max_num_samples:  
+        return start_sample, min(len(audio_array), (start_sample + max_num_samples))
+    elif event_samples < max_num_samples:
+        shift_samples = (max_num_samples - event_samples) / 2
+        return start_sample - shift_samples, min(len(audio_array), (start_sample - shift_samples + max_num_samples))
+    else: 
+        return 0, min(len(audio_array), max_num_samples)
+    
+def truncate_example(example, max_duration_s):
+
+    # Try to get start and end time from labels
+    start_time = example['start_time']
+    end_time = example['end_time']
+    if start_time or end_time:
+        start_sample, end_sample = get_area_of_interest(example, max_duration_s)
+    else:
+        audio_array = example['audio']['array']
+        sampling_rate = example['audio']['sampling_rate']
+        start_sample, end_sample = detect_highest_energy_region(audio_array, max_duration_s, sampling_rate, hop_size=sampling_rate)
+
+
+    max_num_samples = int(max_duration_s * example["audio"]["sampling_rate"])
+    audio_array = example["audio"]["array"]
+    example['audio']['array'] = example['audio']['array'][start_sample : end_sample]
+    return example
+
+# def truncate_example(example, max_duration_s):
+#     max_num_samples = int(max_duration_s * example["audio"]["sampling_rate"])
+#     audio_array = example["audio"]["array"]
+
+#     # take area around start_time and end_time
+#     start_time = example['start_time']
+#     end_time = example['end_time']
+#     if start_time or end_time:
+#         print(start_time, end_time)
+
+#     start_sample = duration_s_to_num_samples(start_time) if start_time else None
+#     end_sample = duration_s_to_num_samples(end_time) if end_time else None
+#     event_samples = end_sample - start_sample if start_sample and end_sample else None
+
+#     # if num_samples is les than max_num_samples -> return
+#     if len(audio_array) <= max_num_samples:
+#         return example
+#     if not start_sample and not end_sample:
+#         example["audio"]["array"] = audio_array[: max_num_samples]
+#     elif not start_sample:
+#         example["audio"]["array"] = audio_array[(end_sample - max_num_samples) : end_sample]
+#     elif not end_sample:
+#         example['audio']['array'] = audio_array[start_sample : min(len(audio_array), start_sample + max_num_samples)]
+#     # if start-end is more than max_duration -> [start:start+max_num_samples]
+#     elif event_samples >= max_num_samples:  
+#         example["audio"]["array"] = audio_array[start_sample : min(len(audio_array), (start_sample + max_num_samples))]
+#     # if start-end is less than max_duration -> distribute padding around start-end
+#     elif event_samples < max_num_samples:
+#         shift_samples = (max_num_samples - event_samples) / 2
+#         example["audio"]["array"] = audio_array[(start_sample - shift_samples) : min(len(audio_array), (start_sample - shift_samples + max_num_samples))]
+#     else: 
+#         example["audio"]["array"] = audio_array[: max_num_samples]
+#     return example
+
+def truncate_audio(example, max_duration_s):
+    max_num_samples = int(max_duration_s * example["audio"]["sampling_rate"])
+    audio_array = example["audio"]["array"]
+    # take area around start_time and end_time
+    start_time = example['start_time']
+    end_time = example['end_time']
+    duration = end_time - start_time
+
+    # if num_samples is less than max_num_samples -> return
+    if len(audio_array) <= max_num_samples:
+        return example
+    # if start-end is more than max_duration -> [start:start+max_num_samples]
+    elif duration >= max_duration_s:
+        start_sample = duration_s_to_num_samples(start_time)
+        example["audio"]["array"] = example["audio"]["array"][start_sample:(start_sample + max_num_samples)]
+    # if start-end is less than max_duration -> distribute padding around start-end
+    elif duration < max_duration_s:
+        shift_samples = duration_s_to_num_samples((max_duration_s - duration) / 2)
+        start_sample = duration_s_to_num_samples(start_time)
+        example["audio"]["array"] = example["audio"]["array"][(start_sample - shift_samples):(start_sample - shift_samples + max_num_samples)]
+
     return example
 
 def truncate_batch(batch, max_duration_s):
     truncated_arrays = []
-    for audio in batch["audio"]:
-        max_num_samples = int(max_duration_s * audio["sampling_rate"])
-        truncated_arrays.append(audio["array"][:max_num_samples])
+    for example in batch:
+        example = truncate_example(example, max_duration_s)
     
     batch["audio"] = [
         {"array": arr, "sampling_rate": audio["sampling_rate"], "path": audio.get("path")}
@@ -442,6 +538,20 @@ def truncate_batch(batch, max_duration_s):
 
     del truncated_arrays
     return batch
+
+# def truncate_batch(batch, max_duration_s):
+#     truncated_arrays = []
+#     for audio in batch["audio"]:
+#         max_num_samples = int(max_duration_s * audio["sampling_rate"])
+#         truncated_arrays.append(audio["array"][:max_num_samples])
+    
+#     batch["audio"] = [
+#         {"array": arr, "sampling_rate": audio["sampling_rate"], "path": audio.get("path")}
+#         for arr, audio in zip(truncated_arrays, batch["audio"])
+#     ]
+
+#     del truncated_arrays
+#     return batch
 
 
 
