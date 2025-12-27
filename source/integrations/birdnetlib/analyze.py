@@ -101,7 +101,7 @@ def analyze_example(example):
     # analyze all sources with birdnetlib
     for source in sources:
 
-        source_array = np.array(source['audio']['array'])
+        source_array = np.array(source['audio']['array']) # TODO: does this provide a copy?? Is a copy necessary?
         source_sampling_rate = source['audio']['sampling_rate']
 
         # Resample if needed

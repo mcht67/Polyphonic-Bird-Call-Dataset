@@ -8,7 +8,7 @@ import math
 
 from modules.dataset import flatten_features, flatten_raw_examples, balance_dataset_by_species, process_batches_in_parallel, move_dataset
 from modules.utils import IndexMap, get_num_workers
-from modules.dsp import calculate_rms, normalize_to_dBFS, dBFS_to_gain, num_samples_to_duration_s, duration_s_to_num_samples
+from modules.dsp import calculate_rms, normalize_to_dBFS, dBFS_to_gain, num_samples_to_duration_s, duration_s_to_num_samples, encode_audio_array
 
 def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, signal_levels, snr_values, mix_levels, segment_length_in_s, sampling_rate, random_seed=None):
 
@@ -154,9 +154,12 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, signal_lev
 
                 flattened_raw = flatten_raw_examples(raw_data_list)
 
+                #audio_bytes = encode_audio_array(mixed_signal, int(sampling_rate), quality=6)
+
                 mix_example = {
                     "id": str(mix_id),
                     "audio": {'array': mixed_signal.copy(), 'sampling_rate': int(sampling_rate)},
+                    #"audio": {'path': None, 'bytes': audio_bytes},
                     # "sampling_rate": int(sampling_rate),
                     "polyphony_degree": int(polyphony_degree),
                     "birdset_code_multilabel": birdset_code_multilabel[:],
@@ -271,8 +274,9 @@ def main():
     temp_dir = "temp/mix"
 
     # Balance dataset
-    balanced_dataset, species_removed = balance_dataset_by_species(segmented_dataset, method, seed=random_seed, max_per_file=max_per_file, min_samples_per_species=50)
-   
+    #balanced_dataset, species_removed = balance_dataset_by_species(segmented_dataset, method, seed=random_seed, max_per_file=max_per_file, min_samples_per_species=50)
+    balanced_dataset = segmented_dataset
+
     # Load no bird/noise dataset
     noise_dataset = load_from_disk(noise_data_path)
     noise_dataset = noise_dataset.cast_column("audio", Audio())

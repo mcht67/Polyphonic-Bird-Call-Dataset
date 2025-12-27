@@ -77,17 +77,12 @@ def main():
         
     # # Get processing configuration  
     num_workers = get_num_workers(gb_per_worker=2, cpu_percentage=0.8)
-    batch_size = 50 # ceil(((len(raw_dataset) + 1) / num_workers)//10)
+    batch_size = 10 # ceil(((len(raw_dataset) + 1) / num_workers)//10)
     batches_per_shard = 1
     
     # Update features
     features = raw_dataset.features.copy()
-    # Verify audio feature is correct
-    print("Audio feature type:", type(features['audio']))
-    print("Audio feature:", features['audio'])
     features['sources'] = [{"audio": {'array': Sequence(Value("float32")), 'sampling_rate': Value("int64")}}]
-    print("Audio feature type:", type(features['audio']))
-    print("Audio feature:", features['audio'])
 
     num_batches = (len(raw_dataset) + batch_size - 1) // batch_size
     print("Process", num_batches, "batches with a batch size of", batch_size,

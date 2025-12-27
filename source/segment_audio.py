@@ -121,7 +121,7 @@ def extract_segments_from_example(example, segment_length_in_s, birdset_subset):
             end_time = segment['end_time']
             if only_target_bird_detected(detections, scientific_name, start_time, end_time, confidence_threshold=0.0):
                 segment_to_return = {
-                    "audio": {'array': np.array(segment['audio_array']) , 'sampling_rate': source_sampling_rate},
+                    "audio": {'array': segment['audio_array'].copy().astype("float32").tolist(), 'sampling_rate': int(source_sampling_rate)},
                     "time_freq_bounds": extract_relevant_bounds(start_time, end_time, time_frequency_bounds),
                     'birdset_code': birdset_code,
                     'ebird_code': ebird_code,
@@ -142,7 +142,7 @@ def extract_segments_from_batch(batch):
     for example in batch:
         segments = extract_segments_from_example(example, _segment_length_in_s, _birdset_subset)
         if segments:
-            all_segments.append(segments)
+            all_segments.extend(segments)
 
         # Delete segments
         del segments
@@ -169,6 +169,7 @@ def main():
     # Load the parameters from the config file
     cfg = OmegaConf.load("params.yaml")
     raw_data_path = cfg.paths.raw_data
+    segmented_data_path = cfg.paths.segmented_data
 
     birdset_subset = cfg.dataset.subset
     segment_length_in_s = cfg.segmentation.segment_length_in_s
@@ -227,6 +228,9 @@ def main():
 
     print("Segmentation with", num_workers, "workers and", num_batches, "batches with a batch size of", batch_size,
             "took", length, "seconds!")
+    
+    # Move dataset to segemented dataset path
+    move_dataset(arrow_dir, segmented_data_path)
 
     print("Finished segementing audio!")
     

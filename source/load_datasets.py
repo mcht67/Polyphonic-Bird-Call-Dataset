@@ -48,7 +48,7 @@ def main():
     # Load Xeno Canto data
     xc_subset_name = dataset_subset + '_xc'
     raw_dataset = load_dataset('DBD-research-group/BirdSet', xc_subset_name, split='train', trust_remote_code=True)
-    raw_dataset = raw_dataset.select(range(2))
+    raw_dataset = raw_dataset.select(range(50))
     features = raw_dataset.features
     print("Audio feature type:", type(features['audio']))
     print("Audio feature:", features['audio'])

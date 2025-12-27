@@ -572,7 +572,7 @@ def extract_relevant_bounds(segment_start_time, segment_end_time, time_freq_boun
         relative_start = clipped_start - segment_start_time
         relative_end = clipped_end - segment_start_time
 
-        relevant_bounds.append((relative_start, relative_end, low_f, high_f))
+        relevant_bounds.append((float(relative_start), float(relative_end), low_f, high_f))
 
     return relevant_bounds
 

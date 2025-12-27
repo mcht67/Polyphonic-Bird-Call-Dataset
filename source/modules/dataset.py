@@ -314,14 +314,10 @@ def process_batches_in_parallel(dataset, process_batch_fn, features, batch_size=
                 total=num_batches,
                 desc="Processing batches"
             )):
-                if batch_idx == 0:
-                    print("First example keys:", batch_result[0].keys())
-                    print("Audio field:", batch_result[0].get('audio'))
 
                 # Write data from main process
                 batch_table = pa.Table.from_pylist(batch_result, schema=temp_schema)
                 writer.write_table(batch_table)
-
                 batches_in_current_shard += 1
                 
                 # Check if we should start a new shard
