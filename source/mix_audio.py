@@ -154,12 +154,12 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, signal_lev
 
                 flattened_raw = flatten_raw_examples(raw_data_list)
 
-                #audio_bytes = encode_audio_array(mixed_signal, int(sampling_rate), quality=6)
+                audio_bytes = encode_audio_array(mixed_signal, int(sampling_rate), quality=6)
 
                 mix_example = {
                     "id": str(mix_id),
                     "audio": {'array': mixed_signal.copy(), 'sampling_rate': int(sampling_rate)},
-                    #"audio": {'path': None, 'bytes': audio_bytes},
+                    "audio": {'path': None, 'bytes': audio_bytes},
                     # "sampling_rate": int(sampling_rate),
                     "polyphony_degree": int(polyphony_degree),
                     "birdset_code_multilabel": birdset_code_multilabel[:],
@@ -275,8 +275,7 @@ def main():
     temp_dir = "temp/mix"
 
     # Balance dataset
-    #balanced_dataset, species_removed = balance_dataset_by_species(segmented_dataset, method, seed=random_seed, max_per_file=max_per_file, min_samples_per_species=50)
-    balanced_dataset = segmented_dataset
+    balanced_dataset, species_removed = balance_dataset_by_species(segmented_dataset, method, seed=random_seed, max_per_file=max_per_file, min_samples_per_species=50)
 
     # Load no bird/noise dataset
     noise_dataset = load_from_disk(noise_data_path)
@@ -299,7 +298,7 @@ def main():
 
     mix_features = Features({
         "id": Value("string"),
-        "audio": {'array': Sequence(Value("float32")) , 'sampling_rate': Value("int32")},
+        "audio": Audio(sampling_rate=22050, mono=True, decode=False), #{'array': Sequence(Value("float32")) , 'sampling_rate': Value("int32")},
         "polyphony_degree": Value("int32"),
         "birdset_code_multilabel": Sequence(Value("int32")),
         "noise_file": Value("string"),
@@ -359,6 +358,8 @@ def main():
 
     # Show the results : this can be altered however you like
     print("Mixing with", num_workers, "workers and batch size of", batch_size, "took", length, "seconds!")
+
+    # TODO: write mix config and removed species into dataset info
 
     # # Save final dataset
     move_dataset(arrow_dir, polyphonic_dataset_path, store_backup=False)
