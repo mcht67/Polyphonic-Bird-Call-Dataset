@@ -2,12 +2,11 @@ from datasets import load_from_disk, Sequence, Value, load_dataset
 from omegaconf import OmegaConf
 import time
 from datetime import datetime
-import os
 import json
-import shutil
+import os
 
 from integrations.birdnetlib.analyze import analyze_batch, init_analyzation_worker
-from modules.dataset import process_batches_in_parallel, overwrite_dataset, move_dataset, process_batches_in_parallel_iter
+from modules.dataset import process_batches_in_parallel, move_dataset
 from modules.utils import get_num_workers
 
 def main():
@@ -21,7 +20,8 @@ def main():
     analysis_metadata_path = cfg.paths.analysis_metadata
 
     # Load dataset with separateed sources
-    raw_dataset = load_from_disk(raw_data_path) # This should work as long as dataset_info.json and state.json exist
+    raw_dataset = load_from_disk(raw_data_path) # This should work as long as dataset_info.json and state.json are created correctly
+
     temp_dir = "temp/analyze"
     #raw_dataset = raw_dataset.take(10)
     features = raw_dataset.features
@@ -48,7 +48,7 @@ def main():
 
     # Multiprocessing config
     num_workers = get_num_workers(gb_per_worker=2, cpu_percentage=0.8)
-    batch_size = 50 # ceil(((len(raw_dataset) + 1) / num_workers)//10)
+    batch_size = 2 # ceil(((len(raw_dataset) + 1) / num_workers)//10)
     num_batches = (len(raw_dataset) + batch_size - 1) // batch_size
     batches_per_shard=1
     print("Process", num_batches, "batches with a batch size of", batch_size,

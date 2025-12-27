@@ -6,6 +6,8 @@ from librosa import resample
 import gc
 
 from modules.utils import log_memory
+from modules.dsp import encode_audio_dict
+
 # from integrations.birdnetlib.analyze import get_most_confident_detection, check_dominant_species
 # from integrations.birdset.utils import validate_species_tag_multi
 
@@ -84,7 +86,7 @@ def separate_audio(session,
 def separate_example(example, separation_session_data=None):
 
     # get audio, filename and ebird-code
-    audio = example["audio"] # acces audio_array by audio['array'] and sampling_rate by audio['sampling_rate']
+    audio = example["audio"] 
 
     # do source separation
     session, input_node, output_node = separation_session_data
@@ -108,6 +110,14 @@ def separate_example(example, separation_session_data=None):
     
     # Explicitly delete the original sources array to free memory
     del sources
+
+    # Re-encode the audio back to OGG using the helper function
+    audio_bytes = encode_audio_dict(audio, format='OGG', quality=4)
+    
+    example['audio'] = {
+        'bytes': audio_bytes,
+        'path': example.get('filepath', None)
+    }
     
     #example['sources'] = [{"audio": {"array": np.array(source), "sampling_rate": source_sr}, "detections": []} for source in sources]
 

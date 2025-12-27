@@ -218,8 +218,8 @@ def create_dataset_info(temp_dir, features, total_shards):
         "splits": {
             "train": {
                 "name": "train",
-                "num_examples": total_examples,
-                "num_shards": total_shards
+                "num_examples": total_examples#, # only used in old dataset versions
+               # "shards": total_shards
             }
         }
     }
@@ -231,10 +231,11 @@ def create_state_info(total_shards, features, data_dir="tmp_process"):
             for i in range(total_shards)
         ],
         "_fingerprint": None,
-        "_format_columns": list(features.keys()),
+        "_format_columns": None,
         "_format_kwargs": {},
-        "_format_type": "arrow",
-        "_output_all_columns": True,
+        "_format_type": None,
+        "_output_all_columns": False, # True does not work with pyarrow table
+        "_split": None, #"train",
     }
 
     # compute a dataset fingerprint
@@ -313,6 +314,10 @@ def process_batches_in_parallel(dataset, process_batch_fn, features, batch_size=
                 total=num_batches,
                 desc="Processing batches"
             )):
+                if batch_idx == 0:
+                    print("First example keys:", batch_result[0].keys())
+                    print("Audio field:", batch_result[0].get('audio'))
+
                 # Write data from main process
                 batch_table = pa.Table.from_pylist(batch_result, schema=temp_schema)
                 writer.write_table(batch_table)
