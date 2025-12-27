@@ -236,7 +236,7 @@ def stft_mask_bandpass(y, sr,
 
     return y_out, bounds_list
 
-def plot_save_mel_spectrogram(audio_array, sampling_rate, filename=None, details=None, output_dir=None):
+def plot_save_mel_spectrogram(audio_array, sampling_rate, filename=None, details=None, output_dir=None, events=None):
     """
     Takes audio_array and sampling_rate as input. Computes Mel spectrogram, plot waveform + spectrogram,
     and saves figure to output_dir if provided.
@@ -287,6 +287,16 @@ def plot_save_mel_spectrogram(audio_array, sampling_rate, filename=None, details
         fmax=8000,
         ax=ax_spec,
     )
+
+    if events is not None:
+        plot_event_bounding_boxes(
+            ax=ax_spec,
+            events=events,
+            edgecolor="cyan",
+            linewidth=2,
+        )
+
+
     fig.colorbar(img, cax=cax, format="%+2.0f dB", label="dB")
     ax_spec.set_xlabel("Time [s]")
     ax_spec.set_ylabel("Mel frequency [Hz]")
@@ -305,6 +315,58 @@ def plot_save_mel_spectrogram(audio_array, sampling_rate, filename=None, details
         plt.close(fig)
 
         print(f"Saved Mel spectrogram to: {save_path}")
+
+from matplotlib.patches import Rectangle
+
+def plot_event_bounding_boxes(
+    ax,
+    events,
+    edgecolor="red",
+    linewidth=2,
+    linestyle="-",
+    alpha=0.9,
+    label=None,
+):
+    """
+    Plot time–frequency bounding boxes on a spectrogram axis.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Axis containing the spectrogram (e.g., ax_spec).
+    events : iterable of tuples
+        Each event is (start_time, end_time, freq_low, freq_high),
+        where time is in seconds and frequency in Hz.
+    edgecolor : str
+        Color of the bounding box edges.
+    linewidth : float
+        Line width of the bounding box edges.
+    linestyle : str
+        Line style of the bounding boxes.
+    alpha : float
+        Transparency of the bounding boxes.
+    label : str or None
+        Optional label for legend (only applied to first box).
+    """
+
+    for i, (t_start, t_end, f_low, f_high) in enumerate(events):
+        width = t_end - t_start
+        height = f_high - f_low
+
+        rect = Rectangle(
+            (t_start, f_low),
+            width,
+            height,
+            fill=False,
+            edgecolor=edgecolor,
+            linewidth=linewidth,
+            linestyle=linestyle,
+            alpha=alpha,
+            label=label if i == 0 else None,
+        )
+
+        ax.add_patch(rect)
+
 
     
 def segment_audio(audio_array, sampling_rate, segment_length_in_s, keep_incomplete=False):
