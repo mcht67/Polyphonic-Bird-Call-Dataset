@@ -173,7 +173,6 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, signal_lev
                     "mix_gain": mix_gain,
                     **flattened_raw.copy()
                 }
-                yield mix_example
 
                 # Reset mixing stage
                 mix_id += 1
@@ -185,8 +184,10 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, signal_lev
                 
                 polyphony_degree = polyphony_map.pop_random()
 
+                yield mix_example        
+
         previous_len = len(raw_data)
-        raw_data = skipped_examples
+        raw_data = skipped_examples # TODO this result in empty raw_data if no skipped files and removes all other files from raw
         if len(raw_data) == previous_len:
             print("Warning: some examples could not be used (possibly all too short or duplicate filenames or amount of files is not enough to reach polyphony degree).")
             print(f'Files left: {[e["original_file"]for e in raw_data]}')
@@ -220,7 +221,7 @@ def mix_batch_generator(raw_dataset, noise_dataset, raw_data_batch_size, max_pol
             noise_data_idx = 0
             print("Warning: noise data is not sufficient. files have to be used multiple times.")
         noise_batch = noise_dataset.select(range(noise_data_idx, noise_data_idx+noise_batch_size))
-        noise_data_idx += 1
+        noise_data_idx += noise_batch_size
 
         yield raw_batch, noise_batch
 
@@ -244,7 +245,7 @@ def mix_batch(batch):
     mixed_examples = []
     for example in generate_mix_examples(raw_data, noise_data, _max_polyphony_degree, _signal_levels, _snr_values, _mix_levels, _segment_length_in_s, _sampling_rate):
         mixed_examples.append(example)
-        return mixed_examples
+    return mixed_examples
 
 
 def main():
