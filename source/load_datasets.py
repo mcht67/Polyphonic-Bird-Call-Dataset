@@ -48,7 +48,6 @@ def main():
     # Load Xeno Canto data
     xc_subset_name = dataset_subset + '_xc'
     raw_dataset = load_dataset('DBD-research-group/BirdSet', xc_subset_name, split='train', trust_remote_code=True)
-    #raw_dataset = raw_dataset.select(range(10))
     features = raw_dataset.features
 
     # Load soundscape data
@@ -59,10 +58,10 @@ def main():
     noise_dataset, test_dataset = separate_to_noise_and_test_split(soundscape_5s_dataset)
 
     # Store datasets
-    #raw_dataset = raw_dataset.select(range(10))
+    raw_dataset = raw_dataset.select(range(50))
     overwrite_dataset(raw_dataset, raw_data_path, store_backup=False)
-    test_dataset.save_to_disk(test_data_path)
-    noise_dataset.save_to_disk(noise_data_path)
+    test_dataset.select(range(50)).save_to_disk(test_data_path)
+    noise_dataset.select(range(50)).save_to_disk(noise_data_path)
 
     # Store raw dataset meta data for dvc tracking
     raw_data_metadata = {

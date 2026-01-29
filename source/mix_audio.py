@@ -253,15 +253,26 @@ def mix_batch_generator(raw_dataset, noise_dataset, raw_data_batch_size, max_pol
     noise_batch_size = num_polyphony_map_per_batch * num_noise_samples_per_polyphony_map
     noise_data_idx = 0
 
+    # Handle case where noise dataset is smaller than required batch size
+    if len(noise_dataset) < noise_batch_size:
+        print(f"Warning: noise dataset ({len(noise_dataset)}) is smaller than required batch size ({noise_batch_size}). Using entire dataset for each batch.")
+    
     for raw_data_idx in range(0, len(raw_dataset), raw_data_batch_size):
-        raw_batch = raw_dataset.select(range(raw_data_idx, min(raw_data_idx+raw_data_batch_size, len(raw_dataset))))
-
-        if len(noise_dataset) < (noise_data_idx + noise_batch_size):
-            noise_data_idx = 0
-            print("Warning: noise data is not sufficient. files have to be used multiple times.")
-        noise_batch = noise_dataset.select(range(noise_data_idx, noise_data_idx+noise_batch_size))
-        noise_data_idx += noise_batch_size
-
+        raw_batch = raw_dataset.select(range(raw_data_idx, min(raw_data_idx + raw_data_batch_size, len(raw_dataset))))
+        
+        # If noise dataset is too small, use entire dataset
+        if len(noise_dataset) < noise_batch_size:
+            noise_batch = noise_dataset
+        else:
+            # Check if we need to wrap around
+            if noise_data_idx + noise_batch_size > len(noise_dataset):
+                noise_data_idx = 0
+                print("Warning: noise data is not sufficient. Files have to be used multiple times.")
+            
+            # Select proper batch
+            noise_batch = noise_dataset.select(range(noise_data_idx, noise_data_idx + noise_batch_size))
+            noise_data_idx += noise_batch_size
+        
         yield raw_batch, noise_batch
 
 def init_mixing_worker(config):

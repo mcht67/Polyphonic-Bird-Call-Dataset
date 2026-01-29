@@ -110,15 +110,15 @@ stages:
       - data/${dataset.subset}/polyphonic:
           cache: false
 
-  upload_dataset:
-    cmd: python source/upload_dataset.py
-    deps:
-      - source/upload_dataset.py
-      - data/${dataset.subset}/segmented
-      - data/${dataset.subset}/polyphonic
-      - source/modules/dsp.py
-    params:
-      - dataset.subset
-      - paths.segmented_data
-      - paths.polyphonic_data
-      - upload
+  # upload_dataset:
+  #   cmd: python source/upload_dataset.py
+  #   deps:
+  #     - source/upload_dataset.py
+  #     - data/${dataset.subset}/segmented
+  #     - data/${dataset.subset}/polyphonic
+  #     - source/modules/dsp.py
+  #   params:
+  #     - dataset.subset
+  #     - paths.segmented_data
+  #     - paths.polyphonic_data
+  #     - upload

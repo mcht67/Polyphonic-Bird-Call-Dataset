@@ -82,8 +82,8 @@ def extract_segments_from_example(example, segment_length_in_s, birdset_subset):
         call_bounds = detect_event_bounds(source_array, sr=source_sampling_rate,
                         smooth_ms=25,
                         threshold_ratio=0.1,
-                        min_gap_s=0.02,
-                        min_call_s=0.1)
+                        min_gap_ms=20,
+                        min_call_ms=10)
         
         # Skip processing if no call bounds detected
         if not call_bounds:
