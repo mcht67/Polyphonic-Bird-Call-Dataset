@@ -77,7 +77,7 @@ def main():
         
     # # Get processing configuration  
     num_workers = get_num_workers(gb_per_worker=2, cpu_percentage=0.8)
-    batch_size = 10 # ceil(((len(raw_dataset) + 1) / num_workers)//10)
+    batch_size = 20 # ceil(((len(raw_dataset) + 1) / num_workers)//10)
     batches_per_shard = 1
     
     # Update features

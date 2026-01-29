@@ -15,11 +15,13 @@ def detect_event_bounds(audio_array,
                        sr=22050,
                        smooth_ms=20,
                        threshold_ratio=0.2,
-                       min_gap_s=0.05,
-                       min_call_s=0.03):
+                       min_gap_ms=50, #0.05,
+                       min_call_ms=30, #0.03,
+                       rms_frame_length_ms=20,
+                       rms_hop_length_ms=5):
     """
     Detects the main bird call (onset, offset) in a clean recording.
-    Small gaps between energy bursts are merged if shorter than `min_gap_s`.
+    Small gaps between energy bursts are merged if shorter than `min_gap_ms`.
 
     Returns:
         (onset_time_s, offset_time_s)
@@ -29,18 +31,16 @@ def detect_event_bounds(audio_array,
     y = audio_array
 
     # 2. Short-time energy (RMS)
-    hop_length = int(0.005 * sr)  # 5 ms hop
-    frame_length = int(0.02 * sr)
+    hop_length = int(rms_hop_length_ms * 0.001 * sr)  # 5 ms hop
+    frame_length = int(rms_frame_length_ms * 0.001 * sr)
     rms = librosa.feature.rms(y=y, frame_length=frame_length, hop_length=hop_length)[0]
     times = librosa.frames_to_time(np.arange(len(rms)), sr=sr, hop_length=hop_length)
 
     # 3. Smooth the energy envelope
-    # TODO: Check division by 5 or 1???
-    win = int(smooth_ms / 5) or 1
+    win = int(smooth_ms / rms_hop_length_ms) or 1 # window size in rms frames
     smooth_rms = np.convolve(rms, np.ones(win)/win, mode='same')
 
     # 4. Threshold at a fraction of the maximum energy
-    # TODO: maximum or average?
     thresh = threshold_ratio * np.max(smooth_rms)
     mask = smooth_rms > thresh
 
@@ -63,6 +63,9 @@ def detect_event_bounds(audio_array,
     # 6. Merge regions separated by short gaps
     merged_onsets = [onsets[0]]
     merged_offsets = []
+    min_gap_s = min_gap_ms * 0.001
+    min_call_s = min_call_ms * 0.001
+
     for i in range(1, len(onsets)):
         gap = times[onsets[i]] - times[offsets[i-1]]
         if gap <= min_gap_s:
@@ -162,12 +165,9 @@ def stft_mask_bandpass(y, sr,
 
     # If no segments provided, treat the whole file as one segment
     if events is None:
-        segments = None
+        segments = [(0, len(y))]
     else:
         segments = [(duration_s_to_num_samples(onset, sr), duration_s_to_num_samples(offset, sr)) for (onset, offset) in events]
-
-    if segments is None:
-        segments = [(0, len(y))]
 
     # Create mask initialized zeros and init bounds list
     mask = np.zeros_like(mags)
@@ -196,13 +196,14 @@ def stft_mask_bandpass(y, sr,
         if smooth_bins and smooth_bins > 1:
             spec = uniform_filter1d(spec, size=smooth_bins)
         spec = np.maximum(spec, 0.0)
+        # sum all freq bins
         total = spec.sum()
         if total <= 0:
             continue
         spec_norm = spec / total
         cumsum = np.cumsum(spec_norm)
 
-        # find percentile bounds
+        # find percentile bounds with linear interpolation
         f_low = np.interp(low_pct/100.0, cumsum, freqs)
         f_high = np.interp(high_pct/100.0, cumsum, freqs)
 
@@ -826,7 +827,52 @@ def encode_audio_dict(audio_dict, format='OGG', quality=4, normalize=True):
         encoded_bytes = buffer.getvalue()
         buffer.close()
         
-        return encoded_bytes
+        return encoded_bytes, sampling_rate
     
     except Exception as e:
         raise RuntimeError(f"Failed to encode audio to {format}: {str(e)}")
+    
+def time_shift_signal(signal, seed, max_shift_ratio=0.2):
+    """
+    Randomly shift a signal in time by padding with zeros and truncating.
+    
+    Parameters:
+    -----------
+    signal : array-like
+        Input signal to be shifted
+    seed : int
+        Random seed for reproducibility
+    max_shift_ratio : float, optional
+        Maximum shift as a ratio of signal length (default: 0.2)
+    
+    Returns:
+    --------
+    numpy.ndarray
+        Time-shifted signal of the same length as input
+    """
+    rng = np.random.RandomState(seed)
+    signal = np.array(signal)
+    signal_len = len(signal)
+    
+    # Determine shift parameters
+    max_shift = int(signal_len * max_shift_ratio)
+    shift_amount = rng.randint(0, max_shift + 1)
+    shift_direction = rng.choice(['front', 'back'])
+    
+    # Apply the shift
+    if shift_amount == 0:
+        return signal, 0
+    
+    zeros = np.zeros(shift_amount)
+    
+    if shift_direction == 'front':
+        # Add zeros to front, truncate from end
+        shifted_signal = np.concatenate([zeros, signal[:-shift_amount]])
+    else:  # shift_direction == 'back'
+        # Add zeros to back, truncate from beginning
+        shifted_signal = np.concatenate([signal[shift_amount:], zeros])
+
+    time_shift = len(zeros)
+    time_shift =  time_shift if shift_direction == 'front' else time_shift * (-1)
+    
+    return shifted_signal, time_shift

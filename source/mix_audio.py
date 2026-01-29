@@ -1,16 +1,17 @@
 import numpy as np
 from pathlib import Path
 from omegaconf import OmegaConf
-from datasets import load_from_disk, Sequence, Value, Features, Audio, Dataset
+from datasets import load_from_disk, Sequence, Value, Features, Audio, Dataset, concatenate_datasets, DatasetDict, load_dataset
 from librosa import resample
 import time
 import math
+import os
 
-from modules.dataset import flatten_features, flatten_raw_examples, balance_dataset_by_species, process_batches_in_parallel, move_dataset
+from modules.dataset import flatten_features, flatten_raw_examples, balance_dataset_by_species, process_batches_in_parallel, move_dataset, split_dataset, test_no_overlap
 from modules.utils import IndexMap, get_num_workers
-from modules.dsp import calculate_rms, normalize_to_dBFS, dBFS_to_gain, num_samples_to_duration_s, duration_s_to_num_samples, encode_audio_array
+from modules.dsp import calculate_rms, normalize_to_dBFS, dBFS_to_gain, num_samples_to_duration_s, duration_s_to_num_samples, encode_audio_array, time_shift_signal
 
-def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, signal_levels, snr_values, mix_levels, segment_length_in_s, sampling_rate, random_seed=None):
+def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, signal_levels, snr_values, mix_levels, segment_length_in_s, sampling_rate, max_time_shift_ratio, random_seed=None):
 
     # Get segment lenght in samples
     segment_length_in_samples = duration_s_to_num_samples(segment_length_in_s, sampling_rate)
@@ -33,9 +34,13 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, signal_lev
     raw_data_list = []
     birdset_code_multilabel = []
     original_filenames = set([])
+
+    signal_gains = []
+    time_shifts = []
     
     polyphony_degree = polyphony_map.pop_random()
     mix_id = 0
+    noise_idx = 0
     raw_data = list(raw_data)
 
     while raw_data:
@@ -94,13 +99,36 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, signal_lev
             leveled_signal = signal_gain * normalized_signal
 
             # Check if signal is long enough and pad if not
+            # TODO: remove? already discarded signal if too short
             if len(leveled_signal) < segment_length_in_samples:
                 padding_length = segment_length_in_samples - len(leveled_signal)
                 leveled_signal = np.pad(leveled_signal, (0, padding_length))
 
+            # Random time shift: Random pad signal at beginning or end and truncate end or beginning
+            time_shifted_signal, time_shift = time_shift_signal(leveled_signal, random_seed, max_shift_ratio=max_time_shift_ratio)
+
+            # Check if time shifted signal contains event, else use original leveled signal
+            time_freq_bounds = example['time_freq_bounds']
+            time_shift_in_s = time_shift / sampling_rate
+            # if positive time shift
+            # check if any start time + time shift is still lower then segment duration
+            # if negative time shift
+            # check if any end time - time shift is still higher than 0
+            event_in_bounds = any(
+                    bound[0] + time_shift_in_s < segment_length_in_s and bound[1] + time_shift_in_s > 0
+                    for bound in time_freq_bounds
+                )
+
+            final_signal, time_shift = (time_shifted_signal, time_shift) if event_in_bounds else (leveled_signal, 0)
+            
+            # apply time shift to event bounds
+            shifted_time_freq_bounds = [(start_time + time_shift_in_s, end_time + time_shift_in_s, freq_low, freq_high) for (start_time, end_time, freq_low, freq_high) in time_freq_bounds]
+             
             # Append Signal    
-            raw_signals.append(leveled_signal)
+            raw_signals.append(final_signal)
             raw_data_list.append(example)
+            signal_gains.append(signal_gain)
+            time_shifts.append(time_shift)
 
             birdset_code = example['birdset_code']
             birdset_code_multilabel.append(birdset_code)
@@ -109,9 +137,9 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, signal_lev
             if len(birdset_code_multilabel) == polyphony_degree:
 
                 # Check if still noise files left
-                if not mix_id < len(noise_data):
+                if noise_idx >= len(noise_data):
                     print("Used all noise files!")
-                    break
+                    noise_idx = 0
 
                  # Get noise signal
                 noise_array = noise_data[mix_id]['audio']['array']
@@ -136,6 +164,12 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, signal_lev
                     print(num_samples_to_duration_s(len(noise_signal), sampling_rate))
                     raise ValueError("Noise signal is too short to be mixed properly.")
                 
+                # Trim to segment length
+                raw_signals = [a[:segment_length_in_samples] for a in raw_signals]
+                
+                # Mix without noise
+                mixed_signal_no_noise = np.sum(raw_signals, axis=0)
+                
                 # Append noise signal
                 raw_signals.append(noise_signal)
                 
@@ -155,11 +189,13 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, signal_lev
                 flattened_raw = flatten_raw_examples(raw_data_list)
 
                 audio_bytes = encode_audio_array(mixed_signal, int(sampling_rate), quality=6)
+                audio_bytes_no_noise = encode_audio_array(mixed_signal_no_noise, int(sampling_rate), quality=6)
 
                 mix_example = {
                     "id": str(mix_id),
-                    "audio": {'array': mixed_signal.copy(), 'sampling_rate': int(sampling_rate)},
-                    "audio": {'path': None, 'bytes': audio_bytes},
+                    #"audio": {'array': mixed_signal.copy(), 'sampling_rate': int(sampling_rate)},
+                    "audio": {'path': None, 'bytes': audio_bytes, 'sampling_rate': int(sampling_rate)},
+                    "no_noise_audio": {'path': None, 'bytes': audio_bytes_no_noise, 'sampling_rate': int(sampling_rate)},
                     # "sampling_rate": int(sampling_rate),
                     "polyphony_degree": int(polyphony_degree),
                     "birdset_code_multilabel": birdset_code_multilabel[:],
@@ -181,6 +217,9 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, signal_lev
                 raw_data_list = []
                 birdset_code_multilabel = []
                 original_filenames = set([])
+
+                signal_gains = []
+                time_shifts = []
                 
                 polyphony_degree = polyphony_map.pop_random()
 
@@ -227,7 +266,7 @@ def mix_batch_generator(raw_dataset, noise_dataset, raw_data_batch_size, max_pol
 
 def init_mixing_worker(config):
     print("Start initilization of worker.")
-    global _max_polyphony_degree, _signal_levels, _snr_values, _mix_levels, _segment_length_in_s, _sampling_rate
+    global _max_polyphony_degree, _signal_levels, _snr_values, _mix_levels, _segment_length_in_s, _sampling_rate, _max_time_shift_ratio
 
     _max_polyphony_degree=config['max_polyphony_degree']
     _signal_levels=config['signal_levels']
@@ -235,6 +274,7 @@ def init_mixing_worker(config):
     _mix_levels=config['mix_levels']
     _segment_length_in_s=config['segment_length_in_s']
     _sampling_rate=config['sampling_rate']
+    _max_time_shift_ratio=config['max_time_shift_ratio']
     print("Initilization of worker succesful.")
 
 
@@ -243,7 +283,7 @@ def mix_batch(batch):
     raw_data, noise_data = batch
 
     mixed_examples = []
-    for example in generate_mix_examples(raw_data, noise_data, _max_polyphony_degree, _signal_levels, _snr_values, _mix_levels, _segment_length_in_s, _sampling_rate):
+    for example in generate_mix_examples(raw_data, noise_data, _max_polyphony_degree, _signal_levels, _snr_values, _mix_levels, _segment_length_in_s, _sampling_rate, _max_time_shift_ratio):
         mixed_examples.append(example)
     return mixed_examples
 
@@ -263,20 +303,26 @@ def main():
     random_seed = cfg.random.random_seed
 
     segment_length_in_s = cfg.segmentation.segment_length_in_s
+    num_iter = cfg.mix.num_iterations
     max_polyphony_degree = cfg.mix.max_polyphony_degree
+    max_time_shift_ratio = cfg.mix.max_time_shift_ratio
 
     signal_levels = cfg.mix.signal_levels
     snr_values = cfg.mix.snr_values
     mix_levels = cfg.mix.mix_levels
+    balance_dataset = cfg.mix.balance_dataset
 
     # Load segmented dataset# 
     segmented_dataset = load_from_disk(segmented_data_path)
     sampling_rate = segmented_dataset[0]['audio']['sampling_rate']
     temp_dir = "temp/mix"
 
-    # Balance dataset
-    balanced_dataset, species_removed = balance_dataset_by_species(segmented_dataset, method, seed=random_seed, max_per_file=max_per_file, min_samples_per_species=50)
-
+    if balance_dataset:
+        # Balance dataset
+        dataset, species_removed = balance_dataset_by_species(segmented_dataset, method, seed=random_seed, max_per_file=max_per_file, min_samples_per_species=50)
+    else:
+        dataset = segmented_dataset
+        
     # Load no bird/noise dataset
     noise_dataset = load_from_disk(noise_data_path)
     noise_dataset = noise_dataset.cast_column("audio", Audio())
@@ -286,7 +332,7 @@ def main():
     print(f"Filtered noise dataset: kept {len(filtered_noise_dataset)} of {len(noise_dataset)} samples")
     
     # Setup features
-    raw_features = balanced_dataset.features
+    raw_features = dataset.features
     flattened_raw_features = flatten_features("raw_files", raw_features)
 
     additional_raw_features = {
@@ -299,6 +345,7 @@ def main():
     mix_features = Features({
         "id": Value("string"),
         "audio": Audio(sampling_rate=22050, mono=True, decode=False), #{'array': Sequence(Value("float32")) , 'sampling_rate': Value("int32")},
+        "no_noise_audio": Audio(sampling_rate=22050, mono=True, decode=False),
         "polyphony_degree": Value("int32"),
         "birdset_code_multilabel": Sequence(Value("int32")),
         "noise_file": Value("string"),
@@ -313,16 +360,37 @@ def main():
         **additional_raw_features
     })
 
-    # Shuffle dataset
-    shuffled_dataset = balanced_dataset.shuffle(seed=random_seed)
+    # Split dataset to completely separate train, validation and test
+    dataset_dict = split_dataset(dataset, test_split=0.1, val_split=0.1)
+    print("Test no overlap:", test_no_overlap(dataset_dict)) 
+    train_data = dataset_dict['train']
+    val_data = dataset_dict['validation']
+    test_data = dataset_dict['test']
+
+    # # Shuffle dataset
+    # shuffled_dataset = dataset.shuffle(seed=random_seed)
+
+    # Create multiple shuffled versions and concatenate them
+    def concatenate_shuffled_dataset_versions(dataset, num_iter, random_seed):
+        shuffled_datasets = []
+        for epoch in range(num_iter):
+            epoch_seed = random_seed + epoch if random_seed else None
+            shuffled_dataset = dataset.shuffle(seed=epoch_seed)
+            shuffled_datasets.append(shuffled_dataset)
+
+        return concatenate_datasets(shuffled_datasets)
+    
+    # Extend datasets by shuffling and concatenating
+    train_data = concatenate_shuffled_dataset_versions(train_data, num_iter, random_seed)
+    val_data = concatenate_shuffled_dataset_versions(val_data, num_iter, random_seed)
+    test_data = concatenate_shuffled_dataset_versions(test_data, num_iter, random_seed)
 
     # Multiprocessing configuration
     num_workers = get_num_workers(gb_per_worker=2, cpu_percentage=0.8)
     batch_size = 100 # ceil(((len(raw_dataset) + 1) / num_workers)//10)
-    num_batches = (len(shuffled_dataset) + batch_size - 1) // batch_size
     batches_per_shard = 2
-    print("Process", num_batches, "batches with a batch size of", batch_size,
-          "on", num_workers, "workers.")
+    # num_batches = (len(combined_dataset) + batch_size - 1) // batch_size
+    # print("Process", num_batches, "batches with a batch size of", batch_size, "on", num_workers, "workers.")
     
     # Calculate the start time
     start = time.time()
@@ -335,12 +403,14 @@ def main():
         'mix_levels': mix_levels,
         'segment_length_in_s': segment_length_in_s,
         'sampling_rate': sampling_rate,
+        'max_time_shift_ratio': max_time_shift_ratio
     }
 
-    # Setup batch generator
-    batch_generator_fn = mix_batch_generator(shuffled_dataset, filtered_noise_dataset, batch_size, max_polyphony_degree)
-
-    arrow_dir = process_batches_in_parallel(shuffled_dataset,
+    # Process train data
+    batch_generator_fn = mix_batch_generator(train_data, filtered_noise_dataset, batch_size, max_polyphony_degree)
+    num_batches = (len(train_data) + batch_size - 1) // batch_size
+    print("Process train split with ", num_batches, "batches with a batch size of", batch_size, "on", num_workers, "workers.")
+    train_dir = process_batches_in_parallel(None,
                                             process_batch_fn=mix_batch,
                                             features=mix_features,
                                             num_workers=num_workers,
@@ -348,9 +418,53 @@ def main():
                                             batches_per_shard=batches_per_shard,
                                             initializer=init_mixing_worker,
                                             initargs=(mix_config,),
-                                            temp_dir=temp_dir,
+                                            temp_dir= os.path.join(temp_dir, "train"),
                                             generate_batches_fn=batch_generator_fn
                                             )
+    
+     # Process validation data
+    batch_generator_fn = mix_batch_generator(val_data, filtered_noise_dataset, batch_size, max_polyphony_degree)
+    num_batches = (len(val_data) + batch_size - 1) // batch_size
+    print("Process train split with ", num_batches, "batches with a batch size of", batch_size, "on", num_workers, "workers.")
+    val_dir = process_batches_in_parallel(None,
+                                            process_batch_fn=mix_batch,
+                                            features=mix_features,
+                                            num_workers=num_workers,
+                                            num_batches=num_batches,
+                                            batches_per_shard=batches_per_shard,
+                                            initializer=init_mixing_worker,
+                                            initargs=(mix_config,),
+                                            temp_dir= os.path.join(temp_dir, "validation"),
+                                            generate_batches_fn=batch_generator_fn
+                                            )
+    
+     # Process test data
+    batch_generator_fn = mix_batch_generator(test_data, filtered_noise_dataset, batch_size, max_polyphony_degree)
+    num_batches = (len(test_data) + batch_size - 1) // batch_size
+    print("Process train split with ", num_batches, "batches with a batch size of", batch_size, "on", num_workers, "workers.")
+    test_dir = process_batches_in_parallel(None,
+                                            process_batch_fn=mix_batch,
+                                            features=mix_features,
+                                            num_workers=num_workers,
+                                            num_batches=num_batches,
+                                            batches_per_shard=batches_per_shard,
+                                            initializer=init_mixing_worker,
+                                            initargs=(mix_config,),
+                                            temp_dir= os.path.join(temp_dir, "test"),
+                                            generate_batches_fn=batch_generator_fn
+                                            )
+    
+    dataset_dict = load_dataset(
+        "arrow",
+        data_files={
+            'train': train_dir + '/*.arrow',
+            'validation': val_dir + '/*.arrow',
+            'test': test_dir + '/*.arrow'
+        },
+        features=mix_features
+    )
+
+    dataset_dict.save_to_disk(temp_dir)
 
     # Calculate the end time and time taken
     end = time.time()
@@ -362,7 +476,7 @@ def main():
     # TODO: write mix config and removed species into dataset info
 
     # # Save final dataset
-    move_dataset(arrow_dir, polyphonic_dataset_path, store_backup=False)
+    move_dataset(temp_dir, polyphonic_dataset_path, store_backup=False)
 
 if __name__=="__main__":
     main()

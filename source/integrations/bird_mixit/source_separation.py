@@ -112,7 +112,7 @@ def separate_example(example, separation_session_data=None):
     del sources
 
     # Re-encode the audio back to OGG using the helper function
-    audio_bytes = encode_audio_dict(audio, format='OGG', quality=4)
+    audio_bytes, sr = encode_audio_dict(audio, format='OGG', quality=4)
     
     example['audio'] = {
         'bytes': audio_bytes,

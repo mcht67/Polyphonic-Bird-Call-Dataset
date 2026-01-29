@@ -78,6 +78,7 @@ def normalize_name(name):
 
 def get_audio_file_name(output_dir, filename, details):
     return f"{output_dir}{Path(filename).stem}_{details}.wav"
+
 class IndexMap:
     """Random non-repeating index generator with optional auto-reset."""
 
@@ -88,15 +89,18 @@ class IndexMap:
         :param auto_reset: If True, reshuffles when exhausted.
         """
         self.auto_reset = auto_reset
-        self.rng = random.Random(random_seed)
         self.indices = indices
         self.num_indices = len(self.indices)
         self.pos = 0
+        self.random_seed = random_seed
         self.reset()
-
+    
     def reset(self):
         """Reshuffle indices and restart sequence."""
+        self.rng = random.Random(self.random_seed)
         self.rng.shuffle(self.indices)
+        if self.random_seed is not None:
+            self.random_seed += 1
         self.pos = 0
 
     def pop_random(self):

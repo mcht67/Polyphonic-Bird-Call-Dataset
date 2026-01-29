@@ -1,5 +1,5 @@
 import random
-from datasets import concatenate_datasets, Features, Sequence, load_from_disk, load_dataset
+from datasets import concatenate_datasets, Features, Sequence, load_from_disk, load_dataset, DatasetDict
 from collections import defaultdict
 import os
 import numpy as np
@@ -85,7 +85,7 @@ def balance_dataset_by_species(dataset, method="undersample", seed=42, max_per_f
 
     # species_removed = {key: values for key, values in species_to_indices.items() if len(values) < min_samples_per_species}
     # species_to_indices = {key: values for key, values in species_to_indices.items() if len(values) >= min_samples_per_species}
-
+    print("Warning: remvoed species:", species_removed)
     # Get count
     counts = [len(indices) for indices in species_to_indices.values()]
 
@@ -263,10 +263,12 @@ def process_batches_in_parallel(dataset, process_batch_fn, features, batch_size=
                                 generate_batches_fn=None):  # Adjust based on memory
     
     # Check inputs
-    if not dataset or len(dataset) == 0:
-        raise ValueError("Dataset can not be empty")
-    if batch_size < 1 and not generate_batches_fn:
-        raise ValueError(f"batch_size has to be >= 1, actual: {batch_size}")
+    if generate_batches_fn is None:
+        if not dataset or len(dataset) == 0:
+            raise ValueError("Dataset can not be empty")
+        if batch_size < 1:
+            raise ValueError(f"batch_size has to be >= 1, actual: {batch_size}")
+    
     if num_workers < 1:
         raise ValueError(f"num_workers has to be >= 1, actual: {num_workers}")
     
@@ -275,8 +277,6 @@ def process_batches_in_parallel(dataset, process_batch_fn, features, batch_size=
     
     # Create schema
     temp_schema = create_schema_from_features(features)
-    print(temp_schema)
-    print(features)
     
     # Init shards
     shard_idx = 0
@@ -553,6 +553,65 @@ def truncate_batch(batch, max_duration_s):
 
 #     del truncated_arrays
 #     return batch
+
+def split_dataset(dataset, test_split, val_split, shuffle=False, random_seed=None):
+    # Split into train/test first (e.g., 90/10) -> test size = 0.1 * number of items
+    train_test = dataset.train_test_split(test_size=test_split, shuffle=shuffle, seed=random_seed)
+
+    # Split the training set further to create validation (e.g., 80/10/10) 0.1 * number of items = x * 0.9 * number of items -> x = 0.1 / 0.9 = 0.11
+    val_split_factor = val_split / (1 - test_split) 
+    train_val = train_test['train'].train_test_split(test_size=val_split_factor, shuffle=shuffle, seed=random_seed)  # 0.11 * 0.9 = 0.1 of total
+
+    # TODO: Add stratified splitting
+
+    # Create the final dataset dictionary
+    return DatasetDict({
+        'train': train_val['train'],      
+        'validation': train_val['test'],   
+        'test': train_test['test']        
+    })
+
+
+def test_no_overlap(split_dataset):
+    """Verify that train/val/test splits have no overlapping examples."""
+    
+    train = split_dataset['train']
+    val = split_dataset['validation']
+    test = split_dataset['test']
+    
+    # Check sizes
+    total_size = len(train) + len(val) + len(test)
+    print(f"Train: {len(train)}, Val: {len(val)}, Test: {len(test)}")
+    print(f"Total: {total_size}")
+    
+    # Create composite identifiers: (filename, time_freq_bounds)
+    def make_identifier(example):
+        # Convert time_freq_bounds to a hashable tuple
+        bounds_tuple = tuple(tuple(bound) for bound in example['time_freq_bounds'])
+        return (example['original_file'], bounds_tuple)
+    
+    train_ids = set(make_identifier(ex) for ex in train)
+    val_ids = set(make_identifier(ex) for ex in val)
+    test_ids = set(make_identifier(ex) for ex in test)
+    
+    # Check for overlaps
+    train_val_overlap = train_ids & val_ids
+    train_test_overlap = train_ids & test_ids
+    val_test_overlap = val_ids & test_ids
+    
+    assert len(train_val_overlap) == 0, f"Train and validation overlap! {len(train_val_overlap)} examples"
+    assert len(train_test_overlap) == 0, f"Train and test overlap! {len(train_test_overlap)} examples"
+    assert len(val_test_overlap) == 0, f"Validation and test overlap! {len(val_test_overlap)} examples"
+    
+    print("✓ No overlaps detected between splits")
+    print(f"✓ All {total_size} examples are unique across splits")
+    
+    # Bonus: Show how many unique files vs total examples
+    all_files = set(train['original_file']) | set(val['original_file']) | set(test['original_file'])
+    print(f"✓ {len(all_files)} unique audio files across {total_size} examples")
+    
+    return True
+
 
 
 
