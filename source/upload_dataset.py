@@ -18,6 +18,8 @@ huggingface_path = huggingface_user + "/" + huggingface_dataset_name
 
 polyphonic_dataset = load_from_disk(polyphonic_data_path)
 dataset_name = subset + "_balanced" if is_balanced else subset
+# TODO: remove after tests
+dataset_name = subset + "_test"
 commit_message_polyphonic = f"updates polyphonic dataset with in {dataset_name}"
 polyphonic_dataset.push_to_hub(huggingface_path, config_name=dataset_name, private=True, commit_message=commit_message_polyphonic)
 

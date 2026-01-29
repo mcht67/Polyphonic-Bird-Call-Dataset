@@ -108,17 +108,20 @@ stages:
       - mix
     outs:
       - data/${dataset.subset}/polyphonic:
-          cache: false
+          cache: false 
+    # Ouput will not be cached and not be pushed to remote, this is not store copies on the local maschine.
+    # Instead the output will be directly uploaded to hugging face.
+    # Caching is not necessary, because Pipeline will just be run once per Dataset, not multiple time with different configurations.
 
-  # upload_dataset:
-  #   cmd: python source/upload_dataset.py
-  #   deps:
-  #     - source/upload_dataset.py
-  #     - data/${dataset.subset}/segmented
-  #     - data/${dataset.subset}/polyphonic
-  #     - source/modules/dsp.py
-  #   params:
-  #     - dataset.subset
-  #     - paths.segmented_data
-  #     - paths.polyphonic_data
-  #     - upload
+  upload_dataset:
+    cmd: python source/upload_dataset.py
+    deps:
+      - source/upload_dataset.py
+      - data/${dataset.subset}/segmented
+      - data/${dataset.subset}/polyphonic
+      - source/modules/dsp.py
+    params:
+      - dataset.subset
+      - paths.segmented_data
+      - paths.polyphonic_data
+      - upload

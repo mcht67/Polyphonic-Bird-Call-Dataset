@@ -203,7 +203,7 @@ def main():
 
     # Get multiprocessing configuration
     num_workers = get_num_workers(gb_per_worker=1, cpu_percentage=0.8)
-    batch_size = 200 # ceil(((len(raw_dataset) + 1) / num_workers)//10)
+    batch_size = 25 # 100 # ceil(((len(raw_dataset) + 1) / num_workers)//10)
     batches_per_shard = 1
     num_batches = (len(raw_dataset) + batch_size - 1) // batch_size
     print("Process", num_batches, "batches with a batch size of", batch_size,
