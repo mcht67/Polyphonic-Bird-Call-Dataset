@@ -109,7 +109,7 @@ stages:
     outs:
       - data/${dataset.subset}/polyphonic:
           cache: false 
-    # Ouput will not be cached and not be pushed to remote, this is not store copies on the local maschine.
+    # Ouput will not be cached and not be pushed to remote, this is to not store copies on the local maschine.
     # Instead the output will be directly uploaded to hugging face.
     # Caching is not necessary, because Pipeline will just be run once per Dataset, not multiple time with different configurations.
 

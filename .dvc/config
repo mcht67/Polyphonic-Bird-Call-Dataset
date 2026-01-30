@@ -1,2 +1,4 @@
 [core]
     remote = myremote
+[cache]
+    dir = /Users/maltecohrt/Documents/Coding/DeepLearning/Polyphonic-Bird-Call-Dataset/.dvc/cache
