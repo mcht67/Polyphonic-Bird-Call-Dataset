@@ -8,3 +8,7 @@ source/exp/
 __pycache__
 trash/git 
 source/trash/
+.dvc/config.local
+secrets/
+tmp/
+local.env
