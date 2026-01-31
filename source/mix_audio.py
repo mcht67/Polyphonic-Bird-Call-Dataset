@@ -34,6 +34,7 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, signal_lev
     raw_data_list = []
     birdset_code_multilabel = []
     original_filenames = set([])
+    shifted_time_freq_bounds_list = []
 
     signal_gains = []
     time_shifts = []
@@ -129,6 +130,7 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, signal_lev
             raw_data_list.append(example)
             signal_gains.append(signal_gain)
             time_shifts.append(time_shift)
+            shifted_time_freq_bounds_list.append(shifted_time_freq_bounds)
 
             birdset_code = example['birdset_code']
             birdset_code_multilabel.append(birdset_code)
@@ -207,6 +209,7 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, signal_lev
                     "mix_orig_rms": mix_orig_rms,
                     "mix_dBFS": mix_dBFS,
                     "mix_gain": mix_gain,
+                    "shifted_time_freq_bounds": shifted_time_freq_bounds_list,
                     **flattened_raw.copy()
                 }
 
@@ -217,6 +220,7 @@ def generate_mix_examples(raw_data, noise_data, max_polyphony_degree, signal_lev
                 raw_data_list = []
                 birdset_code_multilabel = []
                 original_filenames = set([])
+                shifted_time_freq_bounds_list = []
 
                 signal_gains = []
                 time_shifts = []
@@ -243,37 +247,47 @@ def generate_mix_batches(raw_data, noise_data, max_polyphony_degree, signal_leve
     if batch:
         yield batch
 
-def mix_batch_generator(raw_dataset, noise_dataset, raw_data_batch_size, max_polyphony_degree):
+def mix_batch_generator(raw_dataset, noise_dataset, raw_data_batch_size, max_polyphony_degree, random_seed):
 
     # Calculate max number of noise samples needed per batch
-    num_raw_examples_per_polyphony_map = math.ceil((max_polyphony_degree * (max_polyphony_degree + 1)) / 2) # Gauß sum
+    num_raw_examples_per_polyphony_map_iteration = math.ceil((max_polyphony_degree * (max_polyphony_degree + 1)) / 2) # Gauß sum
     #average_num_files_per_mixture = number_of_files_per_polyphony_map_full_iteration / max_polyphony_degree
-    num_polyphony_map_per_batch = math.ceil(raw_data_batch_size / num_raw_examples_per_polyphony_map)
-    num_noise_samples_per_polyphony_map = max_polyphony_degree
-    noise_batch_size = num_polyphony_map_per_batch * num_noise_samples_per_polyphony_map
+    num_polyphony_map_iterations_per_batch = math.ceil(raw_data_batch_size / num_raw_examples_per_polyphony_map_iteration)
+    num_noise_samples_per_polyphony_map_iteration = max_polyphony_degree
+    noise_batch_size = num_polyphony_map_iterations_per_batch * num_noise_samples_per_polyphony_map_iteration
+
+    # Init noise index
     noise_data_idx = 0
 
     # Handle case where noise dataset is smaller than required batch size
-    if len(noise_dataset) < noise_batch_size:
-        print(f"Warning: noise dataset ({len(noise_dataset)}) is smaller than required batch size ({noise_batch_size}). Using entire dataset for each batch.")
+    while len(noise_dataset) < noise_batch_size:
+        print(f"Warning: noise dataset ({len(noise_dataset)}) is smaller than required batch size ({noise_batch_size}). Concatenate shuffled versions of noise dataset.")
+        noise_dataset = concatenate_shuffled_dataset_versions(noise_dataset, 2, random_seed)
     
     for raw_data_idx in range(0, len(raw_dataset), raw_data_batch_size):
         raw_batch = raw_dataset.select(range(raw_data_idx, min(raw_data_idx + raw_data_batch_size, len(raw_dataset))))
         
-        # If noise dataset is too small, use entire dataset
-        if len(noise_dataset) < noise_batch_size:
-            noise_batch = noise_dataset
-        else:
-            # Check if we need to wrap around
-            if noise_data_idx + noise_batch_size > len(noise_dataset):
-                noise_data_idx = 0
-                print("Warning: noise data is not sufficient. Files have to be used multiple times.")
-            
-            # Select proper batch
-            noise_batch = noise_dataset.select(range(noise_data_idx, noise_data_idx + noise_batch_size))
-            noise_data_idx += noise_batch_size
+        # Check if we need to wrap around
+        if noise_data_idx + noise_batch_size > len(noise_dataset):
+            noise_data_idx = 0
+            print("Warning: noise data is not sufficient. Files have to be used multiple times.")
+        
+        # Select proper batch
+        noise_batch = noise_dataset.select(range(noise_data_idx, noise_data_idx + noise_batch_size))
         
         yield raw_batch, noise_batch
+
+        # Update noise index
+        noise_data_idx += noise_batch_size
+
+def concatenate_shuffled_dataset_versions(dataset, num_iter, random_seed):
+        shuffled_datasets = []
+        for epoch in range(num_iter):
+            epoch_seed = random_seed + epoch if random_seed else None
+            shuffled_dataset = dataset.shuffle(seed=epoch_seed)
+            shuffled_datasets.append(shuffled_dataset)
+
+        return concatenate_datasets(shuffled_datasets)
 
 def init_mixing_worker(config):
     print("Start initilization of worker.")
@@ -298,6 +312,24 @@ def mix_batch(batch):
         mixed_examples.append(example)
     return mixed_examples
 
+def get_valid_splits(train_dir, val_dir, test_dir):
+        """Returns a dict of only the splits that have arrow files."""
+        data_files = {}
+        
+        splits_to_check = {
+            'train': train_dir,
+            'validation': val_dir,
+            'test': test_dir
+        }
+        
+        for split_name, directory in splits_to_check.items():
+            arrow_files = list(Path(directory).glob('*.arrow'))
+            if arrow_files: 
+                data_files[split_name] = str(Path(directory) / '*.arrow')
+            else:
+                print("Warning: ", split_name, "split does not contain data, skipping.")
+        
+        return data_files
 
 def main():
 
@@ -377,19 +409,6 @@ def main():
     train_data = dataset_dict['train']
     val_data = dataset_dict['validation']
     test_data = dataset_dict['test']
-
-    # # Shuffle dataset
-    # shuffled_dataset = dataset.shuffle(seed=random_seed)
-
-    # Create multiple shuffled versions and concatenate them
-    def concatenate_shuffled_dataset_versions(dataset, num_iter, random_seed):
-        shuffled_datasets = []
-        for epoch in range(num_iter):
-            epoch_seed = random_seed + epoch if random_seed else None
-            shuffled_dataset = dataset.shuffle(seed=epoch_seed)
-            shuffled_datasets.append(shuffled_dataset)
-
-        return concatenate_datasets(shuffled_datasets)
     
     # Extend datasets by shuffling and concatenating
     train_data = concatenate_shuffled_dataset_versions(train_data, num_iter, random_seed)
@@ -418,9 +437,10 @@ def main():
     }
 
     # Process train data
-    batch_generator_fn = mix_batch_generator(train_data, filtered_noise_dataset, batch_size, max_polyphony_degree)
-    num_batches = (len(train_data) + batch_size - 1) // batch_size
-    print("Process train split with ", num_batches, "batches with a batch size of", batch_size, "on", num_workers, "workers.")
+    train_batch_size = min(len(train_data), batch_size)
+    batch_generator_fn = mix_batch_generator(train_data, filtered_noise_dataset, train_batch_size, max_polyphony_degree, random_seed)
+    num_batches = (len(train_data) + train_batch_size - 1) // train_batch_size
+    print("Process train split with ", num_batches, "batches with a batch size of", train_batch_size, "on", num_workers, "workers.")
     train_dir = process_batches_in_parallel(None,
                                             process_batch_fn=mix_batch,
                                             features=mix_features,
@@ -434,9 +454,10 @@ def main():
                                             )
     
      # Process validation data
-    batch_generator_fn = mix_batch_generator(val_data, filtered_noise_dataset, batch_size, max_polyphony_degree)
-    num_batches = (len(val_data) + batch_size - 1) // batch_size
-    print("Process train split with ", num_batches, "batches with a batch size of", batch_size, "on", num_workers, "workers.")
+    val_batch_size = min(len(val_data), batch_size)
+    batch_generator_fn = mix_batch_generator(val_data, filtered_noise_dataset, val_batch_size, max_polyphony_degree, random_seed)
+    num_batches = (len(val_data) + val_batch_size - 1) // val_batch_size
+    print("Process validation split with ", num_batches, "batches with a batch size of", val_batch_size, "on", num_workers, "workers.")
     val_dir = process_batches_in_parallel(None,
                                             process_batch_fn=mix_batch,
                                             features=mix_features,
@@ -450,9 +471,10 @@ def main():
                                             )
     
      # Process test data
-    batch_generator_fn = mix_batch_generator(test_data, filtered_noise_dataset, batch_size, max_polyphony_degree)
-    num_batches = (len(test_data) + batch_size - 1) // batch_size
-    print("Process train split with ", num_batches, "batches with a batch size of", batch_size, "on", num_workers, "workers.")
+    test_batch_size = min(len(test_data), batch_size)
+    batch_generator_fn = mix_batch_generator(test_data, filtered_noise_dataset, test_batch_size, max_polyphony_degree, random_seed)
+    num_batches = (len(test_data) + test_batch_size - 1) // test_batch_size
+    print("Process test split with ", num_batches, "batches with a batch size of", test_batch_size, "on", num_workers, "workers.")
     test_dir = process_batches_in_parallel(None,
                                             process_batch_fn=mix_batch,
                                             features=mix_features,
@@ -465,17 +487,19 @@ def main():
                                             generate_batches_fn=batch_generator_fn
                                             )
     
-    dataset_dict = load_dataset(
-        "arrow",
-        data_files={
-            'train': train_dir + '/*.arrow',
-            'validation': val_dir + '/*.arrow',
-            'test': test_dir + '/*.arrow'
-        },
-        features=mix_features
-    )
+    # Check data paths
+    data_files = get_valid_splits(train_dir, val_dir, test_dir)
 
-    dataset_dict.save_to_disk(temp_dir)
+    # Create and save dataset, if valid data exists
+    if data_files:
+        dataset_dict = load_dataset(
+            "arrow",
+            data_files=data_files,
+            features=mix_features
+        )
+        dataset_dict.save_to_disk(temp_dir)
+    else:
+        raise ValueError("No valid arrow files found in any directory")
 
     # Calculate the end time and time taken
     end = time.time()

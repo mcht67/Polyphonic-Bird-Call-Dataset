@@ -313,30 +313,41 @@ def process_batches_in_parallel(dataset, process_batch_fn, features, batch_size=
                 ),
                 total=num_batches,
                 desc="Processing batches"
-            )):
+            )):     
+                print("Length of batch result: ", len(batch_result))
 
-                # Write data from main process
-                batch_table = pa.Table.from_pylist(batch_result, schema=temp_schema)
-                writer.write_table(batch_table)
-                batches_in_current_shard += 1
+                # Only write if batch result contains data
+                if len(batch_result) < 1:
+                    safe_close(writer, sink)
+                    clean_dir(temp_dir)
+                    print("No batch result. Clean temp dir.")
+                    return temp_dir
+                else:
+
+                    # Write data from main process
+                    batch_table = pa.Table.from_pylist(batch_result, schema=temp_schema)
+                    writer.write_table(batch_table)
+                    batches_in_current_shard += 1
+                    
+                    # Check if we should start a new shard
+                    if batches_in_current_shard >= batches_per_shard:
+                        # Close current shard
+                        writer.close()
+                        sink.close()
+                        
+                        # Start new shard
+                        shard_idx += 1
+                        batches_in_current_shard = 0
+                        current_shard_file = os.path.join(temp_dir, f"data-{shard_idx:05d}-of-XXXXX.arrow")
+                        
+                        sink = pa.OSFile(current_shard_file, 'wb')
+                        writer = pa.ipc.new_stream(sink, temp_schema)
+                        
+                        print(f"\nStarted new shard {shard_idx}")
+
+                    del batch_table
                 
-                # Check if we should start a new shard
-                if batches_in_current_shard >= batches_per_shard:
-                    # Close current shard
-                    writer.close()
-                    sink.close()
-                    
-                    # Start new shard
-                    shard_idx += 1
-                    batches_in_current_shard = 0
-                    current_shard_file = os.path.join(temp_dir, f"data-{shard_idx:05d}-of-XXXXX.arrow")
-                    
-                    sink = pa.OSFile(current_shard_file, 'wb')
-                    writer = pa.ipc.new_stream(sink, temp_schema)
-                    
-                    print(f"\nStarted new shard {shard_idx}")
-                
-                del batch_result, batch_table
+                del batch_result
                 gc.collect()
                 
                 print(f"Processed batch {batch_idx}, current shard {shard_idx}")
